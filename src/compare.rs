@@ -1,0 +1,466 @@
+//! Per-setting comparison images.
+//!
+//! Images are captured on the user's own PC by the capture tool: for every
+//! value of a setting it writes the config, launches the game straight into a
+//! save (via the Quick Startup mod's `-Character=` switch), and a tiny helper
+//! SDK mod hides the HUD, takes a screenshot and quits. Vault Patcher never
+//! ships third-party screenshots; settings Nvidia covered also link to its
+//! interactive comparison page.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, Result, bail};
+
+use crate::core::backup;
+use crate::tweaks::{ConfigSet, Control, Tweak, Value};
+
+#[derive(Clone, Copy)]
+pub struct Comparison {
+    pub tweak: &'static str,
+    /// Nvidia's interactive comparison for this setting, if one exists.
+    pub link: Option<&'static str>,
+    /// Include this setting in capture runs.
+    pub capture: bool,
+}
+
+pub fn comparisons_dir() -> PathBuf {
+    backup::data_dir().join("comparisons")
+}
+
+/// Every value a capture run shoots for a tweak, with its display label.
+pub fn capture_values(tweak: &Tweak) -> Vec<(Value, String)> {
+    match tweak.control {
+        Control::Toggle => vec![(Value::Bool(false), "Off".into()), (Value::Bool(true), "On".into())],
+        Control::Choice(options) => options
+            .iter()
+            .map(|o| (Value::Choice(o.value), o.label.to_string()))
+            .collect(),
+        Control::Slider { .. } => Vec::new(),
+    }
+}
+
+fn file_stem(value: &Value) -> String {
+    let raw = match value {
+        Value::Bool(b) => if *b { "on" } else { "off" }.to_string(),
+        Value::Choice("") => "none".into(),
+        Value::Choice(c) => c.to_string(),
+        Value::Num(n) => format!("{n}"),
+        Value::Unknown(s) => s.clone(),
+    };
+    raw.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
+pub fn image_path(game_id: &str, tweak: &str, value: &Value) -> PathBuf {
+    comparisons_dir().join(game_id).join(tweak).join(format!("{}.jpg", file_stem(value)))
+}
+
+/// Captured images for a tweak, in option order: (label, path).
+pub fn images(game_id: &str, tweak: &Tweak) -> Vec<(String, PathBuf)> {
+    capture_values(tweak)
+        .into_iter()
+        .map(|(v, label)| (label, image_path(game_id, tweak.id, &v)))
+        .filter(|(_, p)| p.is_file())
+        .collect()
+}
+
+// ---- capture ---------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default)]
+pub struct CaptureProgress {
+    pub done: usize,
+    pub total: usize,
+    pub current: String,
+    pub log: Vec<String>,
+    pub finished: bool,
+    pub cancel: bool,
+}
+
+pub struct CaptureRequest {
+    pub game_id: &'static str,
+    pub root: PathBuf,
+    pub exe: PathBuf,
+    pub config_dir: PathBuf,
+    pub ini_files: &'static [(&'static str, &'static str)],
+    /// Save file name for Quick Startup, e.g. `Save0001.sav`.
+    pub save: String,
+    pub settle_seconds: u32,
+    pub shots: Vec<(&'static Tweak, Value, String)>,
+}
+
+const HELPER_DIR: &str = "sdk_mods/vault_capture";
+
+/// The in-game half of the capture tool. It does nothing unless
+/// `job.json` exists next to it, which only happens during a capture run.
+const HELPER_PY: &str = r#""""Vault Patcher comparison capture helper.
+
+Only active while Vault Patcher is capturing comparison images: once the
+player has spawned and the world has settled it closes popups, hides the HUD
+and weapon, tells Vault Patcher to grab the frame, then quits. Removed
+automatically when the capture run ends.
+"""
+
+import json
+from pathlib import Path
+from typing import Any
+
+import unrealsdk
+from mods_base import build_mod, hook
+from unrealsdk import logging
+
+_DIR = Path(__file__).parent
+_state: dict[str, Any] = {"job": None, "elapsed": 0.0, "stage": 0}
+
+
+def _close_dialogs() -> None:
+    """Close popups such as the golden keys / SHiFT notice shown on load."""
+    for dialog in unrealsdk.find_all("WillowGFxDialogBox", exact=False):
+        if dialog.Name.startswith("Default__"):
+            continue
+        try:
+            dialog.Close()
+            logging.info(f"[vault_capture] closed dialog {dialog.Name}")
+        except Exception as ex:  # noqa: BLE001 - never let a popup stop the capture
+            logging.warning(f"[vault_capture] couldn't close {dialog.Name}: {ex}")
+
+
+def _load_job() -> None:
+    try:
+        _state["job"] = json.loads((_DIR / "job.json").read_text())
+    except (OSError, ValueError):
+        _state["job"] = None
+    _state["elapsed"] = 0.0
+    _state["stage"] = 0
+    logging.info(f"[vault_capture] enabled, job={_state['job']}")
+
+
+def _hide_weapon(pc: Any) -> None:
+    """Hide the first-person weapon and arms so the scene is unobstructed."""
+    pawn = pc.Pawn
+    targets = (
+        ("arms", lambda: pawn.Arms),
+        ("weapon", lambda: pawn.Weapon.FirstPersonMesh),
+        ("weapon (3rd person)", lambda: pawn.Weapon.ThirdPersonMesh),
+    )
+    for label, target in targets:
+        try:
+            target().SetHidden(True)
+        except Exception as ex:  # noqa: BLE001 - cosmetic, never block the shot
+            logging.warning(f"[vault_capture] couldn't hide {label}: {ex}")
+
+
+@hook("Engine.PlayerController:PlayerTick")
+def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
+    job = _state["job"]
+    if job is None or obj.Pawn is None:
+        _state["elapsed"] = 0.0
+        return
+    if _state["elapsed"] == 0.0 and _state["stage"] == 0:
+        logging.info("[vault_capture] player spawned")
+        _close_dialogs()
+    _state["elapsed"] += args.DeltaTime
+    stage = _state["stage"]
+    token = str(job.get("token", ""))
+    if stage == 0 and _state["elapsed"] >= job.get("settle_seconds", 20):
+        logging.info("[vault_capture] world settled; hiding HUD and weapon")
+        _close_dialogs()
+        obj.ConsoleCommand("togglehud", False)
+        _hide_weapon(obj)
+        _state["stage"], _state["elapsed"] = 1, 0.0
+    elif stage == 1 and _state["elapsed"] >= 1.5:
+        # Vault Patcher grabs the frame from the window, then answers.
+        _close_dialogs()
+        (_DIR / "ready.flag").write_text(token)
+        logging.info("[vault_capture] ready for capture")
+        _state["stage"], _state["elapsed"] = 2, 0.0
+    elif stage == 2:
+        captured = (_DIR / "captured.flag")
+        if (captured.exists() and captured.read_text() == token) or _state["elapsed"] >= 30:
+            logging.info("[vault_capture] done, quitting")
+            (_DIR / "done.flag").write_text(token)
+            _state["stage"] = 3
+            obj.ConsoleCommand("exit", False)
+
+
+build_mod(
+    name="Vault Patcher Capture Helper",
+    author="Vault Patcher",
+    version="1.0",
+    description="Takes comparison screenshots during a Vault Patcher capture run. Inactive otherwise.",
+    hooks=[_tick],
+    auto_enable=True,
+    on_enable=_load_job,
+)
+"#;
+
+fn game_running(exe: &Path) -> bool {
+    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains(&name.to_ascii_lowercase()))
+        .unwrap_or(false)
+}
+
+fn kill_game(exe: &Path) {
+    if let Some(name) = exe.file_name() {
+        let _ = Command::new("taskkill").args(["/IM", &name.to_string_lossy(), "/F"]).output();
+    }
+}
+
+/// Stores a frame as a 1600px-wide JPEG.
+fn store_image(img: image::DynamicImage, dest: &Path) -> Result<()> {
+    let img = if img.width() > 1600 {
+        img.resize(1600, u32::MAX, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    fs::create_dir_all(dest.parent().expect("has parent"))?;
+    img.to_rgb8().save_with_format(dest, image::ImageFormat::Jpeg)?;
+    Ok(())
+}
+
+pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result<usize> {
+    let log = |msg: String| {
+        if let Ok(mut p) = progress.lock() {
+            p.log.push(msg);
+        }
+    };
+    if game_running(&req.exe) {
+        bail!("close the game before starting a capture");
+    }
+    let helper = req.root.join(HELPER_DIR);
+    fs::create_dir_all(&helper)?;
+    fs::write(helper.join("__init__.py"), HELPER_PY)?;
+    // New SDK mods start disabled; this settings file switches the helper on.
+    let helper_settings = req.root.join("sdk_mods").join("settings").join("vault_capture.json");
+    fs::create_dir_all(helper_settings.parent().expect("has parent"))?;
+    fs::write(&helper_settings, "{\n    \"enabled\": true\n}\n")?;
+
+    // One snapshot of the configs up front; restored no matter what happens.
+    let config_paths: Vec<PathBuf> = req.ini_files.iter().map(|(_, n)| req.config_dir.join(n)).filter(|p| p.exists()).collect();
+    let snapshot = backup::create(req.game_id, "Before comparison capture", &config_paths)?;
+    let original = ConfigSet::load(&req.config_dir, req.ini_files);
+
+    let result = (|| -> Result<usize> {
+        let mut captured = 0;
+        for (i, (tweak, value, label)) in req.shots.iter().enumerate() {
+            if progress.lock().map(|p| p.cancel).unwrap_or(false) {
+                log("Cancelled".into());
+                break;
+            }
+            if let Ok(mut p) = progress.lock() {
+                p.current = format!("{} — {label}", tweak.label);
+                p.done = i;
+            }
+            let mut config = original.clone();
+            tweak.write(&mut config, value);
+            // Keep dialogue subtitles out of the shots, and run borderless so
+            // the frame can be read from the window. Restored afterwards.
+            config.set(&crate::tweaks::key("engine", "Engine.Engine", "bSubtitlesForcedOff"), "TRUE");
+            for (file, section, name, v) in [
+                ("engine", "SystemSettings", "Fullscreen", "False"),
+                ("engine", "SystemSettings", "WindowedFullscreen", "True"),
+                ("launcher", "SystemSettings", "Fullscreen", "False"),
+                ("launcher", "SystemSettings", "WindowedFullscreen", "True"),
+            ] {
+                if config.file(file).is_some_and(|f| f.exists) {
+                    config.set(&crate::tweaks::key(file, section, name), v);
+                }
+            }
+            config.save_dirty()?;
+
+            let token = format!("{}-{i}", std::process::id());
+            for flag in ["ready.flag", "captured.flag", "done.flag"] {
+                let _ = fs::remove_file(helper.join(flag));
+            }
+            fs::write(helper.join("job.json"), serde_json::json!({"settle_seconds": req.settle_seconds, "token": token}).to_string())?;
+
+            let clock = Instant::now();
+            let child = Command::new(&req.exe)
+                .args(["-NoLauncher", "-nostartupmovies", &format!("-Character={}", req.save)])
+                .current_dir(req.exe.parent().unwrap_or(&req.root))
+                .spawn()
+                .context("launching the game")?;
+            let flag_is = |name: &str| fs::read_to_string(helper.join(name)).is_ok_and(|t| t == token);
+
+            // Wait for the helper to say the frame is ready (max 4 minutes).
+            let mut frame = None;
+            while clock.elapsed() < Duration::from_secs(240) {
+                if progress.lock().map(|p| p.cancel).unwrap_or(false) {
+                    break;
+                }
+                if flag_is("ready.flag") {
+                    // Steam's overlay shows a one-off "Access Steam features"
+                    // pop-up for a few seconds after it starts; let it pass.
+                    std::thread::sleep(Duration::from_secs(7));
+                    frame = Some(crate::core::winshot::capture_process_window(child.id()));
+                    fs::write(helper.join("captured.flag"), &token)?;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            // Let the helper quit the game, then make sure it's gone.
+            let quit_by = Instant::now() + Duration::from_secs(25);
+            while game_running(&req.exe) && Instant::now() < quit_by {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            kill_game(&req.exe);
+            match frame {
+                None => log(format!("{} — {label}: timed out (did the save load?)", tweak.label)),
+                Some(Err(e)) => log(format!("{} — {label}: {e:#}", tweak.label)),
+                Some(Ok(img)) => {
+                    store_image(image::DynamicImage::ImageRgb8(img), &image_path(req.game_id, tweak.id, value))?;
+                    captured += 1;
+                    log(format!("{} — {label}: captured", tweak.label));
+                }
+            }
+        }
+        Ok(captured)
+    })();
+
+    // Always put the user's settings and game folder back.
+    backup::restore(&snapshot).context("restoring your settings after capture")?;
+    let _ = fs::remove_dir_all(&helper);
+    let _ = fs::remove_file(&helper_settings);
+    if let Ok(mut p) = progress.lock() {
+        p.finished = true;
+        p.done = p.total;
+        p.current.clear();
+    }
+    result
+}
+
+// ---- hosted image packs ---------------------------------------------------------------
+// The app bundles no images: a captured set is published as a zip on the
+// project's GitHub releases and downloaded on first use.
+
+/// GitHub repository whose releases host the comparison packs.
+pub const IMAGE_REPO: &str = "KelpHect/VaultPatcher";
+
+fn pack_url(game_id: &str) -> String {
+    format!("https://github.com/{IMAGE_REPO}/releases/download/comparisons-{game_id}/comparisons-{game_id}.zip")
+}
+
+pub fn has_local_images(game_id: &str) -> bool {
+    fs::read_dir(comparisons_dir().join(game_id)).is_ok_and(|mut d| d.next().is_some())
+}
+
+/// Downloads and unpacks the published image pack for a game.
+pub fn download_pack(game_id: &str) -> Result<usize> {
+    let tmp = std::env::temp_dir().join(format!("vaultpatcher-comparisons-{game_id}.zip"));
+    crate::core::net::download(&pack_url(game_id), &tmp)?;
+    let count = unpack_pack(&tmp, &comparisons_dir().join(game_id));
+    fs::remove_file(&tmp).ok();
+    count
+}
+
+/// Extracts `<tweak>/<value>.jpg` entries into `dest`; anything else is ignored.
+fn unpack_pack(zip_path: &Path, dest: &Path) -> Result<usize> {
+    let mut archive = zip::ZipArchive::new(fs::File::open(zip_path)?).context("image pack isn't a valid zip")?;
+    let mut count = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().replace('\\', "/");
+        // Only `<tweak>/<value>.jpg` entries; nothing can escape the folder.
+        let parts: Vec<&str> = name.split('/').collect();
+        let safe = parts.len() == 2
+            && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)) && *p != "..")
+            && name.ends_with(".jpg");
+        if entry.is_dir() || !safe {
+            continue;
+        }
+        let out = dest.join(parts[0]).join(parts[1]);
+        fs::create_dir_all(out.parent().expect("has parent"))?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes)?;
+        fs::write(out, bytes)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Maintainer tool: zips a captured set for publishing.
+pub fn package(game_id: &str, out: &Path) -> Result<usize> {
+    use std::io::Write as _;
+    let src = comparisons_dir().join(game_id);
+    let file = fs::File::create(out).with_context(|| format!("creating {}", out.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    // JPEGs are already compressed.
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut count = 0;
+    let mut tweaks: Vec<_> = fs::read_dir(&src)?.flatten().filter(|e| e.path().is_dir()).collect();
+    tweaks.sort_by_key(|e| e.file_name());
+    for tweak in tweaks {
+        let mut images: Vec<_> = fs::read_dir(tweak.path())?.flatten().collect();
+        images.sort_by_key(|e| e.file_name());
+        for image in images {
+            let name = format!("{}/{}", tweak.file_name().to_string_lossy(), image.file_name().to_string_lossy());
+            zip.start_file(name, options)?;
+            zip.write_all(&fs::read(image.path())?)?;
+            count += 1;
+        }
+    }
+    zip.finish()?;
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stores_frames_as_resized_jpeg() {
+        let dir = std::env::temp_dir().join("vaultpatcher-compare-test");
+        let _ = fs::remove_dir_all(&dir);
+        let frame = image::RgbImage::from_pixel(2560, 1440, image::Rgb([200, 120, 20]));
+        let dest = dir.join("out/on.jpg");
+        store_image(image::DynamicImage::ImageRgb8(frame), &dest).unwrap();
+        let out = image::open(&dest).unwrap();
+        assert_eq!((out.width(), out.height()), (1600, 900));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_packs_only_unpack_plain_jpegs() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("vaultpatcher-pack-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("pack.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for name in ["ao/on.jpg", "../evil.jpg", "ao/../../evil2.jpg", "ao/script.exe", "deep/a/b.jpg"] {
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(b"x").unwrap();
+        }
+        zip.finish().unwrap();
+        let dest = dir.join("out");
+        assert_eq!(unpack_pack(&zip_path, &dest).unwrap(), 1);
+        assert!(dest.join("ao/on.jpg").is_file());
+        assert!(!dir.join("evil.jpg").exists() && !dest.join("ao/script.exe").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_names_are_safe_and_distinct() {
+        assert_eq!(file_stem(&Value::Choice("WillowEngineMaterials.RyanScenePostProcess")), "WillowEngineMaterials_RyanScenePostProcess");
+        assert_eq!(file_stem(&Value::Bool(true)), "on");
+        assert_eq!(file_stem(&Value::Choice("")), "none");
+    }
+
+    #[test]
+    fn every_comparison_points_at_a_real_tweak() {
+        for game in crate::games::all() {
+            for c in game.comparisons {
+                let t = game.tweak(c.tweak).unwrap_or_else(|| panic!("{}: {}", game.id, c.tweak));
+                if c.capture {
+                    assert!(!capture_values(t).is_empty(), "{} can't be captured", c.tweak);
+                }
+            }
+        }
+    }
+}
