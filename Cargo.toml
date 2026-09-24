@@ -20,6 +20,8 @@ ureq = { version = "2", features = ["json"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 flate2 = "1"
 tar = "0.4"
+ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
+rodio = { version = "0.20", default-features = false, features = ["symphonia-mp3"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "png", "jpeg"] }
 
 [target.'cfg(windows)'.dependencies]

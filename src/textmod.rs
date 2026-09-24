@@ -442,20 +442,24 @@ mod tests {
 }
 
 #[cfg(test)]
-mod live_tests {
+mod merge_tests {
     use super::*;
 
     #[test]
-    #[ignore]
-    fn live_print_paths() {
-        let dir = std::env::var("VP_RESEARCH").unwrap();
-        for f in ["Patch.txt", "TextFixes.blcm", "BL2 Sorted Fast Travel.blcm", "BL2 Mega TimeSaver XL.blcm"] {
-            let text = decode(&std::fs::read(format!("{dir}/{f}")).unwrap());
-            let nodes = parse(&text);
-            println!("== {f}");
-            for p in paths(&nodes).iter().filter(|p| p.matches('/').count() <= 2) {
-                println!("{p}");
-            }
-        }
+    fn escaping_and_ansi_survive_the_merge() {
+        let src = "<BLCMM v=\"1\">\r\n\t<body>\r\n\t\t<category name=\"M\">\r\n\t\t\t<hotfix name=\"H\">\r\n\t\t\t\t<code profiles=\"default\">set O.P Text \"Caf\u{e9}, a \\\\ b\"</code>\r\n\t\t\t</hotfix>\r\n\t\t</category>\r\n\t</body>\r\n</BLCMM>\r\n";
+        let nodes = parse(src);
+        let text = merge(
+            &MergeInfo { game: "BL2", title: "T", author: "A", version: "1", description: "D" },
+            &[],
+            &[Source { title: "M".into(), credit: "c".into(), nodes }],
+        );
+        // One key, one value, with quotes and backslashes escaped.
+        assert!(text.contains("Keys (\"SparkPatchEntry-BLCMM1\")"));
+        assert!(text.contains("Values (\"O.P,Text,,\\\"Caf\u{e9}, a \\\\\\\\ b\\\"\")"));
+        // Latin-1 round trip of the written bytes.
+        let bytes = encode(&text);
+        assert!(bytes.contains(&0xE9));
+        assert_eq!(decode(&bytes), text);
     }
 }

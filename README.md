@@ -31,26 +31,29 @@ Toggle between modes from the title bar.
     redistributed; see `src/textmod.rs`.
 
   *Restore vanilla* undoes everything, and every change is backed up first.
+- **Advanced**: every tweak, preset, exe patch and mod-manager tool, as described below.
 
 ## Comparison images
 
 Settings that Nvidia's tweak guide covers link to its interactive comparison pages. Those
 pages are linked, never bundled, because Nvidia's terms don't allow redistribution. Our own
-images come from **Advanced → Comparison Capture**, which runs these steps on the user's PC:
+images are captured by the maintainers and published as a release asset
+(`comparisons-bl2.zip`), which the app downloads on first run. Anyone can re-shoot them from
+**App Settings → Tools → Comparison Capture**, which runs these steps on their own PC:
 
 1. Writes each option of a setting.
 2. Launches the game straight into a chosen save (via Quick Startup's `-Character=`).
-3. A tiny helper SDK mod hides the HUD, runs `shot` and quits.
+3. A tiny helper SDK mod closes startup notices, hides the HUD and weapon, and signals ready.
+   The app grabs the game window, then the helper quits.
 4. The screenshot is stored as a JPEG in `%APPDATA%\VaultPatcher\comparisons`.
 5. Settings are restored afterwards.
 
-Captured images show as thumbnails under each setting, with a full-size viewer to flip
-between options.
-- **Advanced**: every tweak, preset, exe patch and mod-manager tool, as described below.
+In Quick Settings the options *are* the pictures: click one to use it. Any setting with
+images opens a side-by-side viewer with a draggable divider (← → switch sides, Esc closes).
 
 ## Features
 
-- **81 config tweaks for BL2** across display, framerate, world detail, AA, textures,
+- **82 config tweaks for BL2** across display, framerate, world detail, AA, textures,
   outlines/cel shading, post-processing, shadows, PhysX, FOV, console, HUD, gameplay, audio,
   startup and network. Each one shows its ini location, default, performance cost, and
   whether the in-game menu also manages it.
@@ -65,7 +68,11 @@ between options.
   and text mod install/enable/disable/remove, and core SDK modules locked.
 - **Backups**: every apply, patch and SDK install is snapshotted first and can be restored
   in one click.
-- **Launch** page with `-NoLauncher`, `-NoStartupMovies` and other switches.
+- **Launch options** on the Overview page (`-NoLauncher`, `-NoStartupMovies` and more),
+  used by the sidebar's Play button.
+- **Look and feel**: three themes (Vault Hunter, Pandora, Hyperion), Bangers and Barlow
+  fonts, and optional button sounds played from the game's own launcher audio files
+  (nothing is bundled). The status bar has music and mute toggles.
 - **Detection** of Steam libraries, Epic Games installs, and `Documents\My Games` config
   folders, with manual overrides.
 

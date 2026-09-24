@@ -43,6 +43,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 let Some(preset) = def.presets.iter().find(|p| p.id == *id) else { continue };
                 let ws = ws.clone();
                 let color = preset.rarity.color();
+                let current = !preset.values.is_empty()
+                    && preset.values.iter().all(|(id, v)| def.tweak(id).is_none_or(|t| game.effective(t) == v.to_value()));
                 row = row.child(
                     ui::panel()
                         .id(SharedString::from(format!("q-preset-{id}")))
@@ -57,8 +59,15 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.))
-                                .child(div().font_family(theme::FONT_DISPLAY).text_size(px(24.)).text_color(color).child(preset.name))
-                                .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(preset.description)),
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(div().font_family(theme::FONT_DISPLAY).text_size(px(24.)).text_color(color).child(preset.name))
+                                        .when(current, |d| d.child(ui::badge("Current", theme::success()))),
+                                )
+                                .child(div().text_size(px(13.)).text_color(theme::text_muted()).child(preset.description)),
                         )
                         .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.preset_now(preset, cx))),
                 );
@@ -75,6 +84,27 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             }
             first = false;
             let value = game.effective(tweak);
+            if let Some(cards) = super::compare::choice_cards(tweak, ws, cx) {
+                list = list.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .px(px(18.))
+                        .py(px(16.))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_LABEL)
+                                .font_weight(FontWeight::BOLD)
+                                .text_size(px(16.))
+                                .text_color(theme::text())
+                                .child(tweak.label),
+                        )
+                        .child(ui::body(tweak.description))
+                        .child(cards),
+                );
+                continue;
+            }
             list = list.child(
                 div()
                     .flex()

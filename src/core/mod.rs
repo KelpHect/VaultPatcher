@@ -5,6 +5,7 @@ pub mod backup;
 pub mod binpatch;
 pub mod detect;
 pub mod display;
+pub mod gpu;
 pub mod ini;
 pub mod manifest;
 pub mod net;

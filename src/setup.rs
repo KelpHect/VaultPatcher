@@ -154,23 +154,14 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
     let root = game.install.as_ref().map(|i| i.root.as_path());
     let needs_install = || Status::Blocked("Game install not found".into());
     match c.kind {
-        ComponentKind::Settings { values, .. } => {
+        ComponentKind::Settings { .. } => {
             if !game.config_found() {
                 return Status::Blocked("Launch the game once to create its config".into());
             }
-            // Tweaks hidden for this game don't count.
-            let applicable: Vec<_> = values
-                .iter()
-                .filter_map(|(id, v)| game.def.tweak(id).map(|t| (t, v)))
-                .collect();
-            let matching = applicable
-                .iter()
-                .filter(|(t, v)| game.current(t).unwrap_or_else(|| t.default.to_value()) == v.to_value())
-                .count();
-            if matching == applicable.len() {
+            // Once applied, a bundle stays "installed" even if the player
+            // later fine-tunes the same settings themselves.
+            if manifest::read(game.def.id, c.id).is_some() {
                 Status::Active(None)
-            } else if matching * 2 >= applicable.len() {
-                Status::Partial
             } else {
                 Status::Missing
             }
@@ -198,7 +189,10 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
                     "Another {} is already installed (ReShade or a manual DXVK?)",
                     target.dlls()[0]
                 )),
-                _ => Status::Missing,
+                _ => match crate::core::gpu::dxvk_ready() {
+                    Ok(()) => Status::Missing,
+                    Err(reason) => Status::Blocked(reason),
+                },
             }
         }
         ComponentKind::Sdk => match (&game.sdk, root) {
@@ -237,6 +231,26 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
     }
 }
 
+/// Whether Vault Patcher itself installed/applied `c` (so "Restore vanilla"
+/// may undo it). Things the player installed by hand are left alone.
+pub fn installed_by_us(c: &Component, game: &GameState, launch_args: &[String]) -> bool {
+    match c.kind {
+        ComponentKind::Settings { .. } | ComponentKind::Dxvk { .. } | ComponentKind::File { .. } | ComponentKind::SdkZip { .. } => {
+            manifest::read(game.def.id, c.id).is_some()
+        }
+        ComponentKind::Sdk => manifest::read(game.def.id, "sdk").is_some(),
+        ComponentKind::TextPatch { .. } => text_patch_parts(game.def.id).iter().any(|p| p == c.id),
+        ComponentKind::LaunchArg(arg) => launch_args.iter().any(|a| a.eq_ignore_ascii_case(arg)),
+        // An exe patch can't be told apart from how the game shipped.
+        ComponentKind::ExePatch(_) => false,
+    }
+}
+
+/// Remembers that a settings bundle was applied.
+pub fn record_settings_applied(game_id: &str, component: &str) -> Result<()> {
+    manifest::write(game_id, component, &Manifest { version: "applied".into(), files: Vec::new(), replaced: None })
+}
+
 /// Where the mod manager parks a disabled copy of an SDK mod file.
 fn disabled_twin(path: &Path) -> Option<PathBuf> {
     let dir = path.parent()?;
@@ -256,10 +270,13 @@ pub fn install_dxvk(game_id: &str, component: &str, root: &Path, target: DxvkTar
     let dest_dir = root.join(exe_dir);
     let mut targets: Vec<PathBuf> = target.dlls().iter().map(|d| dest_dir.join(d)).collect();
     targets.push(dest_dir.join("dxvk.conf"));
-    let existing: Vec<PathBuf> = targets.iter().filter(|p| p.exists()).cloned().collect();
-    if !existing.is_empty() {
-        backup::create(game_id, "Before installing DXVK", &existing)?;
-    }
+    let replaced = manifest::plan_replace(game_id, component, "Before installing DXVK", &targets)?;
+    // Recorded before extraction, so a half-finished install can still be removed.
+    manifest::write(
+        game_id,
+        component,
+        &Manifest { version: asset.tag.clone(), files: targets.clone(), replaced: replaced.clone() },
+    )?;
 
     let mut wanted: Vec<(String, PathBuf)> = target
         .dlls()
@@ -284,14 +301,6 @@ pub fn install_dxvk(game_id: &str, component: &str, root: &Path, target: DxvkTar
         bail!("DXVK archive layout changed: missing {}", wanted[0].0);
     }
     fs::write(dest_dir.join("dxvk.conf"), conf)?;
-    manifest::write(
-        game_id,
-        component,
-        &Manifest {
-            version: asset.tag.clone(),
-            files: targets,
-        },
-    )?;
     Ok(asset.tag)
 }
 
@@ -306,21 +315,17 @@ pub fn install_file(
     enable: Option<&str>,
 ) -> Result<String> {
     let out = root.join(dest);
-    if out.exists() {
-        backup::create(game_id, &format!("Before installing {component}"), std::slice::from_ref(&out))?;
-    }
+    let replaced =
+        manifest::plan_replace(game_id, component, &format!("Before installing {component}"), std::slice::from_ref(&out))?;
+    manifest::write(
+        game_id,
+        component,
+        &Manifest { version: "latest".into(), files: vec![out.clone()], replaced },
+    )?;
     net::download(url, &out)?;
     if let Some(module) = enable {
         enable_sdk_module(root, module)?;
     }
-    manifest::write(
-        game_id,
-        component,
-        &Manifest {
-            version: "latest".into(),
-            files: vec![out],
-        },
-    )?;
     Ok("latest".into())
 }
 
@@ -342,11 +347,23 @@ pub fn install_sdk_zip(game_id: &str, component: &str, root: &Path, url: &str, f
     net::download(url, &tmp)?;
     let mut archive = zip::ZipArchive::new(fs::File::open(&tmp)?).context("not a valid zip")?;
     let sdk_mods = root.join("sdk_mods");
+    let wanted = |name: &str| name.starts_with(&format!("{folder}/")) && !name.split('/').any(|p| p == "..");
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().filter(|e| !e.is_dir()).map(|e| e.name().replace('\\', "/")))
+        .filter(|n| wanted(n))
+        .collect();
+    let targets: Vec<PathBuf> = names.iter().map(|n| sdk_mods.join(n)).collect();
+    let replaced = manifest::plan_replace(game_id, component, &format!("Before installing {component}"), &targets)?;
+    manifest::write(
+        game_id,
+        component,
+        &Manifest { version: "latest".into(), files: names.iter().map(|n| sdk_mods.join(n)).collect(), replaced },
+    )?;
     let mut written = Vec::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().replace('\\', "/");
-        if entry.is_dir() || !name.starts_with(&format!("{folder}/")) || name.split('/').any(|p| p == "..") {
+        if entry.is_dir() || !wanted(&name) {
             continue;
         }
         let out = sdk_mods.join(&name);
@@ -358,9 +375,9 @@ pub fn install_sdk_zip(game_id: &str, component: &str, root: &Path, url: &str, f
     }
     fs::remove_file(&tmp).ok();
     if written.is_empty() {
+        manifest::remove(game_id, component);
         bail!("{url} doesn't contain a {folder}/ folder");
     }
-    manifest::write(game_id, component, &Manifest { version: "latest".into(), files: written })?;
     Ok("latest".into())
 }
 
@@ -448,10 +465,12 @@ pub fn rebuild_text_patch(
 /// every other setting the user has.
 fn set_tml_auto_enable(root: &Path, file: &Path, enabled: bool) -> Result<()> {
     let settings = root.join("sdk_mods").join("settings").join("text_mod_loader.json");
-    let mut json: serde_json::Value = fs::read_to_string(&settings)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    let mut json: serde_json::Value = match fs::read_to_string(&settings) {
+        Ok(text) => serde_json::from_str(&text).with_context(|| {
+            format!("{} isn't valid JSON; fix or delete it so its settings aren't lost", settings.display())
+        })?,
+        Err(_) => serde_json::json!({}),
+    };
     if !json.is_object() {
         json = serde_json::json!({});
     }

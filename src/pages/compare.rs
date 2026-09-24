@@ -66,66 +66,298 @@ pub fn strip(tweak: &'static Tweak, ws: &Entity<Workspace>, cx: &App) -> Option<
     Some(row.into_any_element())
 }
 
-/// Full-size viewer; flip between a setting's options to compare them.
-pub fn lightbox(ws: &Entity<Workspace>, cx: &App) -> Option<AnyElement> {
+/// For settings with captured images: the options *are* the pictures.
+/// Click a card to choose it (saved instantly in Simple mode); "Compare"
+/// opens the side-by-side viewer.
+pub fn choice_cards(tweak: &'static Tweak, ws: &Entity<Workspace>, cx: &App) -> Option<AnyElement> {
     let state = ws.read(cx);
-    let (tweak_id, index) = state.preview?;
-    let def = state.game().def;
-    let tweak = def.tweak(tweak_id)?;
-    let images = compare::images(def.id, tweak);
-    let (label, path) = images.get(index).cloned().or_else(|| images.first().cloned())?;
-
-    let close_ws = ws.clone();
-    let mut tabs = div().flex().flex_wrap().justify_center().gap(px(8.));
-    for (i, (l, _)) in images.iter().enumerate() {
+    let game = state.game();
+    let images = compare::images(game.def.id, tweak);
+    let values = compare::captured_values(game.def.id, tweak);
+    if images.len() < 2 || images.len() != values.len() {
+        return None;
+    }
+    let current = game.effective(tweak);
+    let simple = state.mode() == crate::games::Mode::Simple;
+    let selected_index = values.iter().position(|v| *v == current).unwrap_or(0);
+    let mut grid = div().flex().flex_wrap().gap(px(12.));
+    for (i, ((label, path), value)) in images.into_iter().zip(values).enumerate() {
+        let selected = value == current;
         let ws = ws.clone();
-        tabs = tabs.child(
-            ui::chip(SharedString::from(format!("lb-{i}")), l.clone(), i == index)
-                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.open_preview(tweak_id, i, cx))),
+        grid = grid.child(
+            div()
+                .id(SharedString::from(format!("card-{}-{i}", tweak.id)))
+                .w(px(178.))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(3.))
+                .border_2()
+                .border_color(if selected { theme::accent() } else { gpui::transparent_black().into() })
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::panel_hi()))
+                .child(div().w(px(168.)).h(px(94.)).child(img(path).size_full().object_fit(ObjectFit::Cover)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(3.))
+                        .pb(px(2.))
+                        .font_family(theme::FONT_LABEL)
+                        .font_weight(if selected { FontWeight::BOLD } else { FontWeight::SEMIBOLD })
+                        .text_size(px(14.5))
+                        .text_color(if selected { theme::text() } else { theme::text_muted() })
+                        .when(selected, |d| d.child(ui::icon(Icon::Check).text_size(px(11.)).text_color(theme::accent())))
+                        // Constrained so long names wrap instead of spilling into the next card.
+                        .child(div().flex_1().min_w(px(0.)).child(label)),
+                )
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, _| crate::sound::play(crate::sound::Sound::Click))
+                .on_click(move |_, _, cx| {
+                    let value = value.clone();
+                    ws.update(cx, |ws, cx| {
+                        if simple {
+                            ws.set_now(tweak, value, cx);
+                        } else {
+                            ws.stage(tweak, value, cx);
+                        }
+                    })
+                }),
         );
     }
+    let compare_ws = ws.clone();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(grid)
+            .child(
+                div()
+                    .id(SharedString::from(format!("compare-{}", tweak.id)))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(14.))
+                    .text_color(theme::echo())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(theme::text()))
+                    .child("⇆ Compare side by side")
+                    .on_click(move |_, _, cx| compare_ws.update(cx, |ws, cx| ws.open_preview(tweak.id, selected_index, cx))),
+            )
+            .into_any_element(),
+    )
+}
+
+/// Marker for divider drags in the comparison viewer.
+#[derive(Clone)]
+struct DividerDrag;
+
+/// Side-by-side viewer: two options of a setting stacked in one frame with a
+/// draggable divider; the option chips below choose what's on each side.
+pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<AnyElement> {
+    let state = ws.read(cx);
+    let preview = state.preview?;
+    let def = state.game().def;
+    let tweak = def.tweak(preview.tweak)?;
+    let images = compare::images(def.id, tweak);
+    if images.is_empty() {
+        return None;
+    }
+    let pick = |i: usize| images.get(i).or_else(|| images.first()).cloned().expect("non-empty");
+    let (left_label, left_path) = pick(preview.left);
+    let (right_label, right_path) = pick(preview.right);
+
+    // Fit a 16:9 frame into the window, leaving room for the controls.
+    let viewport = window.viewport_size();
+    let max_w = f32::from(viewport.width) * 0.86;
+    let max_h = f32::from(viewport.height) - 260.;
+    let frame_w = max_w.min(max_h * 16. / 9.).max(320.);
+    let frame_h = frame_w * 9. / 16.;
+    let split = preview.split.clamp(0., 1.);
+
+    let bounds = std::rc::Rc::new(std::cell::Cell::new(gpui::Bounds::<gpui::Pixels>::default()));
+    let to_split = |x: gpui::Pixels, b: gpui::Bounds<gpui::Pixels>| {
+        if b.size.width <= px(0.) { 0.5 } else { ((x - b.left()) / b.size.width).clamp(0., 1.) }
+    };
+    let down_ws = ws.clone();
+    let drag_ws = ws.clone();
+    let bounds_down = bounds.clone();
+    let bounds_canvas = bounds.clone();
+
+    let tag = |text: String, right: bool| {
+        div()
+            .absolute()
+            .top(px(12.))
+            .when(right, |d| d.right(px(12.)))
+            .when(!right, |d| d.left(px(12.)))
+            .px(px(10.))
+            .py(px(4.))
+            .bg(theme::with_alpha(theme::bg_deep(), 0.8))
+            .font_family(theme::FONT_LABEL)
+            .font_weight(FontWeight::BOLD)
+            .text_size(px(13.))
+            .text_color(theme::text())
+            .child(text)
+    };
+
+    let frame = div()
+        .id("compare-frame")
+        .relative()
+        .flex_none()
+        .w(px(frame_w))
+        .h(px(frame_h))
+        .overflow_hidden()
+        .border_2()
+        .border_color(theme::ink())
+        .cursor(gpui::CursorStyle::ResizeLeftRight)
+        .child(gpui::canvas(move |b, _, _| bounds_canvas.set(b), |_, _, _, _| {}).absolute().size_full())
+        // Right option fills the frame…
+        .child(img(right_path).absolute().top_0().left_0().w(px(frame_w)).h(px(frame_h)).object_fit(ObjectFit::Cover))
+        // …and the left option is revealed up to the divider.
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .h_full()
+                .w(px(frame_w * split))
+                .overflow_hidden()
+                .child(img(left_path).w(px(frame_w)).h(px(frame_h)).object_fit(ObjectFit::Cover)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(frame_w * split - 1.5))
+                .w(px(3.))
+                .bg(theme::accent()),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(px(frame_h / 2. - 18.))
+                .left(px(frame_w * split - 18.))
+                .size(px(36.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::accent())
+                .border_2()
+                .border_color(theme::ink())
+                .text_color(theme::accent_ink())
+                .font_family(theme::FONT_LABEL)
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(14.))
+                .child("◀▶"),
+        )
+        .child(tag(left_label.clone(), false))
+        .child(tag(right_label.clone(), true))
+        .on_mouse_down(gpui::MouseButton::Left, move |ev, _, cx| {
+            cx.stop_propagation();
+            let s = to_split(ev.position.x, bounds_down.get());
+            down_ws.update(cx, |ws, cx| ws.set_preview(|p| p.split = s, cx));
+        })
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .on_drag(DividerDrag, |_, _, _, cx| cx.new(|_| ui::EmptyView))
+        .on_drag_move::<DividerDrag>(move |ev, _, cx| {
+            let s = to_split(ev.event.position.x, ev.bounds);
+            drag_ws.update(cx, |ws, cx| ws.set_preview(|p| p.split = s, cx));
+        });
+
+    let chips = |side_right: bool| {
+        let mut row = div()
+            .flex()
+            .items_center()
+            .flex_wrap()
+            .gap(px(6.))
+            .child(ui::label(if side_right { "Right" } else { "Left" }).mr(px(4.)));
+        for (i, (label, _)) in images.iter().enumerate() {
+            let ws = ws.clone();
+            let selected = if side_right { preview.right == i } else { preview.left == i };
+            row = row.child(
+                ui::chip(SharedString::from(format!("lb-{}-{i}", if side_right { "r" } else { "l" })), label.clone(), selected)
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        ws.update(cx, |ws, cx| {
+                            ws.set_preview(|p| if side_right { p.right = i } else { p.left = i }, cx)
+                        })
+                    }),
+            );
+        }
+        row
+    };
+
+    let close_ws = ws.clone();
     Some(
         div()
             .id("lightbox")
             .absolute()
             .inset_0()
-            // Swallow every click so nothing underneath the overlay reacts.
             .occlude()
-            .bg(theme::with_alpha(theme::bg_deep(), 0.94))
+            .bg(theme::with_alpha(theme::bg_deep(), 0.95))
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap(px(14.))
-            .p(px(32.))
+            .p(px(24.))
             .on_click(move |_, _, cx| close_ws.update(cx, |ws, cx| ws.close_preview(cx)))
             .child(
                 div()
-                    .font_family(theme::FONT_LABEL)
-                    .font_weight(FontWeight::BOLD)
-                    .text_size(px(20.))
-                    .text_color(theme::text())
-                    .child(format!("{} — {label}", tweak.label)),
+                    .font_family(theme::FONT_DISPLAY)
+                    .text_size(px(30.))
+                    .text_color(theme::accent())
+                    .child(tweak.label),
             )
+            .child(frame)
             .child(
                 div()
-                    .flex_none()
-                    .w(relative(0.9))
-                    .h(relative(0.66))
-                    .overflow_hidden()
+                    .id("lightbox-controls")
                     .flex()
-                    .items_center()
+                    .flex_wrap()
                     .justify_center()
-                    // Images keep their aspect ratio, so cap them to the box.
-                    .child(img(path).max_w_full().max_h_full().object_fit(ObjectFit::Contain)),
+                    .gap(px(28.))
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(chips(false))
+                    .child(chips(true)),
             )
+            .child({
+                let values = compare::captured_values(def.id, tweak);
+                let simple = state.mode() == crate::games::Mode::Simple;
+                let mut row = div().id("lightbox-use").flex().gap(px(12.)).on_click(|_, _, cx| cx.stop_propagation());
+                for (side, index, label) in [("left", preview.left, &left_label), ("right", preview.right, &right_label)] {
+                    let Some(value) = values.get(index).cloned() else { continue };
+                    let ws = ws.clone();
+                    row = row.child(
+                        ui::button(
+                            SharedString::from(format!("use-{side}")),
+                            format!("Use {label}"),
+                            Some(Icon::Check),
+                            if side == "right" { ui::Variant::Primary } else { ui::Variant::Secondary },
+                        )
+                        .on_click(move |_, _, cx| {
+                            let value = value.clone();
+                            ws.update(cx, |ws, cx| {
+                                if simple {
+                                    ws.set_now(tweak, value, cx);
+                                } else {
+                                    ws.stage(tweak, value, cx);
+                                }
+                                ws.close_preview(cx);
+                            })
+                        }),
+                    );
+                }
+                row
+            })
             .child(
                 div()
-                    .id("lightbox-tabs")
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(tabs),
+                    .text_size(px(13.))
+                    .text_color(theme::text_dim())
+                    .child("Drag across the image to compare · ← → switch the right side · Esc closes"),
             )
-            .child(div().text_size(px(12.5)).text_color(theme::text_dim()).child("Click an option to flip between them · click anywhere else to close"))
             .into_any_element(),
     )
 }
@@ -174,7 +406,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
         );
     }
     if saves.is_empty() {
-        save_row = save_row.child(ui::body("No save files found."));
+        save_row = save_row.child(ui::body("No save files yet — play the game once and save somewhere scenic first."));
     }
     let mut settle_row = div().flex().gap(px(8.));
     for secs in [15u32, 25, 40] {
@@ -198,6 +430,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
 
     // ---- run / progress
     let running = state.capture_running();
+    let no_saves = saves.is_empty();
     let start_ws = ws.clone();
     let cancel_ws = ws.clone();
     let mut run = ui::panel().p(px(20.)).flex().flex_col().gap(px(12.)).child(
@@ -211,9 +444,19 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
                     .on_click(move |_, _, cx| cancel_ws.update(cx, |ws, cx| ws.cancel_capture(cx)))
                     .into_any_element()
             } else {
-                ui::button("capture-start", "Start capture", Some(Icon::Camera), Variant::Primary)
-                    .on_click(move |_, _, cx| start_ws.update(cx, |ws, cx| ws.start_capture(cx)))
-                    .into_any_element()
+                ui::button(
+                    "capture-start",
+                    if have >= total_shots { "Recapture" } else { "Start capture" },
+                    Some(Icon::Camera),
+                    if have >= total_shots { Variant::Secondary } else { Variant::Primary },
+                )
+                .when(no_saves, |b| b.opacity(0.4))
+                .on_click(move |_, _, cx| {
+                    if !no_saves {
+                        start_ws.update(cx, |ws, cx| ws.start_capture(cx))
+                    }
+                })
+                .into_any_element()
             }),
     );
     if let Some(progress) = state.capture.as_ref().and_then(|p| p.lock().ok().map(|p| p.clone())) {

@@ -111,12 +111,13 @@ fn hero(state: &Workspace, installed: usize, total: usize, to_install: usize, ws
     let patch_ws = ws.clone();
     let play_ws = ws.clone();
 
-    let (cta, dim) = if running {
-        ("Working…".to_string(), true)
-    } else if to_install == 0 {
-        ("All upgrades installed".to_string(), true)
+    let done = !running && to_install == 0;
+    let cta = if running {
+        "Working…".to_string()
+    } else if done {
+        "All selected upgrades installed".to_string()
     } else {
-        (format!("Upgrade game  ·  {to_install}"), false)
+        format!("Upgrade game  ·  {to_install}")
     };
 
     // Status: a live progress line while running, otherwise the install count.
@@ -186,16 +187,21 @@ fn hero(state: &Workspace, installed: usize, total: usize, to_install: usize, ws
                         .items_center()
                         .gap(px(14.))
                         .child(
-                            ui::button("setup-patch", cta, Some(Icon::Rocket), Variant::Primary)
+                            // Once everything's installed, Play is the main action.
+                            ui::button("setup-patch", cta, Some(Icon::Rocket), if done { Variant::Secondary } else { Variant::Primary })
                                 .h(px(48.))
                                 .px(px(26.))
                                 .text_size(px(16.))
-                                .when(dim, |b| b.opacity(0.5))
-                                .on_click(move |_, _, cx| patch_ws.update(cx, |ws, cx| ws.run_setup(false, cx))),
+                                .when(running, |b| b.opacity(0.5))
+                                .on_click(move |_, _, cx| {
+                                    if !done {
+                                        patch_ws.update(cx, |ws, cx| ws.run_setup(false, cx))
+                                    }
+                                }),
                         )
                         .when(game.install.is_some(), |d| {
                             d.child(
-                                ui::button("setup-play", "Play", Some(Icon::Play), Variant::Secondary)
+                                ui::button("setup-play", "Play", Some(Icon::Play), if done { Variant::Primary } else { Variant::Secondary })
                                     .h(px(48.))
                                     .px(px(22.))
                                     .text_size(px(16.))
@@ -258,18 +264,9 @@ fn row(
                 .gap(px(14.))
                 .px(px(20.))
                 .py(px(11.))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::panel_hi()))
+                .when(can_toggle, |d| d.cursor_pointer().hover(|s| s.bg(theme::panel_hi())))
                 .child(
-                    div()
-                        .id(SharedString::from(format!("check-{id}")))
-                        .child(checkbox(checked, !can_toggle))
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            if can_toggle {
-                                toggle_ws.update(cx, |ws, cx| ws.toggle_component(id, cx));
-                            }
-                        }),
+                    checkbox(checked, !can_toggle),
                 )
                 .child(
                     div()
@@ -293,12 +290,29 @@ fn row(
                     d.child(div().flex_none().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(pill_color).child(p))
                 })
                 .child(
-                    ui::icon(Icon::ChevronRight)
-                        .text_size(px(10.))
-                        .text_color(theme::text_dim())
-                        .when(expanded, |d| d.text_color(theme::text())),
+                    div()
+                        .id(SharedString::from(format!("more-{id}")))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .text_size(px(13.))
+                        .text_color(if expanded { theme::text() } else { theme::text_dim() })
+                        .hover(|s| s.bg(theme::line()).text_color(theme::text()))
+                        .child(if expanded { "Less" } else { "Details" })
+                        .child(ui::icon(Icon::ChevronRight).text_size(px(9.)))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            expand_ws.update(cx, |ws, cx| ws.toggle_expanded(id, cx))
+                        }),
                 )
-                .on_click(move |_, _, cx| expand_ws.update(cx, |ws, cx| ws.toggle_expanded(id, cx))),
+                .on_click(move |_, _, cx| {
+                    if can_toggle {
+                        crate::sound::play(crate::sound::Sound::Click);
+                        toggle_ws.update(cx, |ws, cx| ws.toggle_component(id, cx));
+                    }
+                }),
         )
         .when(expanded, |d| {
             d.child(

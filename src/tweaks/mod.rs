@@ -121,16 +121,6 @@ pub enum Impact {
     High,
 }
 
-impl Impact {
-    pub fn label(self) -> &'static str {
-        match self {
-            Impact::None => "No perf cost",
-            Impact::Low => "Low cost",
-            Impact::Medium => "Medium cost",
-            Impact::High => "High cost",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Flags {

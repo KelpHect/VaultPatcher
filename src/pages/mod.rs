@@ -34,7 +34,6 @@ pub fn render(nav: &NavItem, ws: &Entity<Workspace>, window: &mut Window, cx: &m
         PageKind::Presets => presets::render(ws, window, cx),
         PageKind::Patches => patches::render(ws, window, cx),
         PageKind::Mods => mods::render(ws, window, cx),
-        PageKind::Launch => launch::render(ws, window, cx),
         PageKind::Backups => backups::render(ws, window, cx),
         PageKind::Settings => settings::render(ws, window, cx),
         PageKind::Setup => setup::render(ws, window, cx),
@@ -57,7 +56,8 @@ pub(crate) fn page_header(title: &str, subtitle: &str, actions: Vec<AnyElement>)
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(ui::display(title.to_string(), 40.))
+                .child(ui::display(title.to_string(), 40.).text_color(theme::text()))
+                .child(div().w(px(44.)).h(px(4.)).bg(theme::accent()))
                 .child(ui::body(subtitle.to_string()).max_w(px(720.))),
         )
         .child(div().flex().gap(px(10.)).children(actions))

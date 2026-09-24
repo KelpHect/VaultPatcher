@@ -278,14 +278,15 @@ const LAUNCH_ARGS: &[LaunchArg] = &[LaunchArg {
 const NAV: &[NavGroup] = &[
     NavGroup {
         title: "Command Center",
+        tabs: None,
         items: &[
             NavItem { kind: PageKind::Overview, title: "Overview", icon: Icon::Home, categories: &[] },
-            NavItem { kind: PageKind::Launch, title: "Launch", icon: Icon::Play, categories: &[] },
             NavItem { kind: PageKind::Presets, title: "Presets", icon: Icon::Star, categories: &[] },
         ],
     },
     NavGroup {
-        title: "Tweaks",
+        title: "Game Settings",
+        tabs: Some(Icon::Sliders),
         items: &[
             NavItem { kind: PageKind::Tweaks("display"), title: "Display & FPS", icon: Icon::Display, categories: &["display", "framerate"] },
             NavItem { kind: PageKind::Tweaks("graphics"), title: "Graphics", icon: Icon::Picture, categories: &["quality"] },
@@ -295,6 +296,7 @@ const NAV: &[NavGroup] = &[
     },
     NavGroup {
         title: "Modding",
+        tabs: None,
         items: &[NavItem { kind: PageKind::Mods, title: "Mods", icon: Icon::Puzzle, categories: &[] }],
     },
     COMMON_NAV,

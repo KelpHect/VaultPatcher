@@ -1,44 +1,162 @@
 //! Borderlands-inspired visual language: cel-shaded ink outlines, hard comic
-//! drop shadows, hazard yellow on grimy Pandora browns, and loot rarity
-//! colors used as semantic accents.
+//! drop shadows, hazard yellow and ECHO cyan, and loot rarity colors used as
+//! semantic accents.
+//!
+//! Colors come from the active [`Palette`], switchable at runtime; every
+//! widget reads them through the functions below.
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use gpui::{BoxShadow, Hsla, Rgba, point, px, rgb};
+use serde::{Deserialize, Serialize};
 
+/// Big comic titles only.
 pub const FONT_DISPLAY: &str = "Bangers";
-pub const FONT_LABEL: &str = "Bahnschrift";
-pub const FONT_BODY: &str = "Segoe UI";
+/// Condensed industrial type for labels, buttons, nav and headings.
+pub const FONT_LABEL: &str = "Barlow Condensed";
+/// Body copy.
+pub const FONT_BODY: &str = "Barlow";
 pub const FONT_MONO: &str = "Consolas";
 pub const FONT_ICON: &str = "Segoe MDL2 Assets";
 
+/// The bundled typefaces (all SIL Open Font License).
+pub const FONT_FILES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Bangers-Regular.ttf"),
+    include_bytes!("../assets/fonts/Barlow-Regular.ttf"),
+    include_bytes!("../assets/fonts/Barlow-Medium.ttf"),
+    include_bytes!("../assets/fonts/Barlow-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/BarlowCondensed-Medium.ttf"),
+    include_bytes!("../assets/fonts/BarlowCondensed-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/BarlowCondensed-Bold.ttf"),
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Palette {
+    /// Near-black cool neutrals so hazard yellow and ECHO cyan pop — the
+    /// Borderlands 3/4 menu look.
+    #[default]
+    VaultHunter,
+    /// Warm, dusty Pandora browns (the original theme).
+    Pandora,
+    /// Hyperion corporate: deep navy with bright yellow.
+    Hyperion,
+}
+
+impl Palette {
+    pub const ALL: [Palette; 3] = [Palette::VaultHunter, Palette::Pandora, Palette::Hyperion];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Palette::VaultHunter => "Vault Hunter",
+            Palette::Pandora => "Pandora",
+            Palette::Hyperion => "Hyperion",
+        }
+    }
+}
+
+struct Colors {
+    bg: u32,
+    bg_deep: u32,
+    panel: u32,
+    panel_hi: u32,
+    panel_lo: u32,
+    line: u32,
+    text: u32,
+    text_muted: u32,
+    text_dim: u32,
+    echo: u32,
+}
+
+const VAULT_HUNTER: Colors = Colors {
+    bg: 0x111317,
+    bg_deep: 0x0a0b0e,
+    panel: 0x181b21,
+    panel_hi: 0x21252d,
+    panel_lo: 0x14161b,
+    line: 0x2b3039,
+    text: 0xf2f4f6,
+    text_muted: 0xc3c9d1,
+    text_dim: 0x858e9a,
+    echo: 0x34d4ff,
+};
+
+const PANDORA: Colors = Colors {
+    bg: 0x15110d,
+    bg_deep: 0x0e0b08,
+    panel: 0x1f1a15,
+    panel_hi: 0x29231c,
+    panel_lo: 0x1b1611,
+    line: 0x352d23,
+    text: 0xf3e9d2,
+    text_muted: 0xcfc2a9,
+    text_dim: 0x9a8b74,
+    echo: 0x3fd0ff,
+};
+
+const HYPERION: Colors = Colors {
+    bg: 0x0e1422,
+    bg_deep: 0x080c16,
+    panel: 0x152033,
+    panel_hi: 0x1d2b43,
+    panel_lo: 0x111a2b,
+    line: 0x26354f,
+    text: 0xf1f5fb,
+    text_muted: 0xbfcbe0,
+    text_dim: 0x7f8fab,
+    echo: 0x4fd8ff,
+};
+
+static ACTIVE: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_palette(palette: Palette) {
+    ACTIVE.store(palette as u8, Ordering::Relaxed);
+}
+
+pub fn palette() -> Palette {
+    match ACTIVE.load(Ordering::Relaxed) {
+        1 => Palette::Pandora,
+        2 => Palette::Hyperion,
+        _ => Palette::VaultHunter,
+    }
+}
+
+fn colors() -> &'static Colors {
+    match palette() {
+        Palette::VaultHunter => &VAULT_HUNTER,
+        Palette::Pandora => &PANDORA,
+        Palette::Hyperion => &HYPERION,
+    }
+}
+
 pub fn bg() -> Rgba {
-    rgb(0x15110d)
+    rgb(colors().bg)
 }
 pub fn bg_deep() -> Rgba {
-    rgb(0x0e0b08)
+    rgb(colors().bg_deep)
 }
 pub fn panel() -> Rgba {
-    rgb(0x1f1a15)
+    rgb(colors().panel)
 }
 pub fn panel_hi() -> Rgba {
-    rgb(0x29231c)
+    rgb(colors().panel_hi)
 }
 pub fn panel_lo() -> Rgba {
-    rgb(0x1b1611)
+    rgb(colors().panel_lo)
 }
 pub fn ink() -> Rgba {
     rgb(0x050403)
 }
 pub fn line() -> Rgba {
-    rgb(0x352d23)
+    rgb(colors().line)
 }
 pub fn text() -> Rgba {
-    rgb(0xf3e9d2)
+    rgb(colors().text)
 }
 pub fn text_muted() -> Rgba {
-    rgb(0xcfc2a9)
+    rgb(colors().text_muted)
 }
 pub fn text_dim() -> Rgba {
-    rgb(0x9a8b74)
+    rgb(colors().text_dim)
 }
 pub fn accent() -> Rgba {
     rgb(0xffc21a)
@@ -50,13 +168,13 @@ pub fn accent_ink() -> Rgba {
     rgb(0x1a1204)
 }
 pub fn danger() -> Rgba {
-    rgb(0xe8452c)
+    rgb(0xff4d3d)
 }
 pub fn success() -> Rgba {
-    rgb(0x5fd35a)
+    rgb(0x5fdc6a)
 }
 pub fn echo() -> Rgba {
-    rgb(0x3fd0ff)
+    rgb(colors().echo)
 }
 
 /// Loot rarity tiers, reused as badge and status colors across the app.
@@ -160,6 +278,8 @@ pub enum Icon {
     Minimize,
     Maximize,
     Restore,
+    Music,
+    Mute,
     Terminal,
     Puzzle,
 }
@@ -209,6 +329,8 @@ impl Icon {
             Icon::Minimize => "\u{E921}",
             Icon::Maximize => "\u{E922}",
             Icon::Restore => "\u{E923}",
+            Icon::Music => "\u{EC4F}",
+            Icon::Mute => "\u{E74F}",
             Icon::Terminal => "\u{E756}",
             Icon::Puzzle => "\u{EA86}",
         }

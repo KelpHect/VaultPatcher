@@ -12,7 +12,8 @@ use crate::workspace::Workspace;
 
 pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> AnyElement {
     let state = ws.read(cx);
-    let def = state.game().def;
+    let game = state.game();
+    let def = game.def;
 
     let mut grid = div().flex().flex_wrap().gap(px(20.));
     for preset in def.presets {
@@ -22,6 +23,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         } else {
             preset.values.iter().filter(|(id, _)| def.tweak(id).is_some()).count()
         };
+        // Pending changes count, so a just-loaded preset shows as current.
+        let current = !preset.values.is_empty()
+            && preset.values.iter().all(|(id, v)| def.tweak(id).is_none_or(|t| game.effective(t) == v.to_value()));
         let ws = ws.clone();
         let mut chips = div().flex().flex_wrap().gap(px(5.));
         for (id, value) in preset.values.iter().take(8) {
@@ -31,7 +35,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         .px(px(6.))
                         .py(px(1.))
                         .bg(theme::panel_lo())
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(theme::text_muted())
                         .child(format!("{}: {}", t.label, value.to_value().display(&t.control))),
                 );
@@ -66,7 +70,13 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .child(ui::badge(preset.rarity.label(), color))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(6.))
+                                        .child(ui::badge(preset.rarity.label(), color))
+                                        .when(current, |d| d.child(ui::badge("Current", theme::success()))),
+                                )
                                 .child(ui::label(format!("{count} settings"))),
                         )
                         .child(
@@ -83,7 +93,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                             div().pt(px(6.)).child(
                                 ui::button(
                                     SharedString::from(format!("preset-{}", preset.id)),
-                                    "Stage preset",
+                                    "Load preset",
                                     Some(Icon::Add),
                                     Variant::Primary,
                                 )
@@ -102,7 +112,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .gap(px(20.))
         .child(page_header(
             "Presets",
-            "Stage a bundle of tweaks in one click, then fine-tune individual settings before applying. Presets stack: later ones override earlier ones.",
+            "Load a bundle of settings in one click, then fine-tune before pressing Apply. Loading a preset replaces any changes still waiting.",
             vec![],
         ))
         .child(grid)

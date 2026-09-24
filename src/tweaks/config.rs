@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::Key;
 use crate::core::backup;
@@ -15,6 +15,10 @@ pub struct ConfigFile {
     pub doc: IniDoc,
     /// Whether the file existed on disk when loaded.
     pub exists: bool,
+    /// False when the file exists but couldn't be read (locked by the game,
+    /// antivirus, a cloud placeholder...). Such a file is never written, so
+    /// an empty stand-in can't replace the user's real settings.
+    pub readable: bool,
     pub dirty: bool,
 }
 
@@ -24,15 +28,21 @@ pub struct ConfigSet {
 }
 
 impl ConfigSet {
+    /// Files that exist but couldn't be read.
+    pub fn unreadable(&self) -> impl Iterator<Item = &ConfigFile> {
+        self.files.values().filter(|f| !f.readable)
+    }
+
     /// Loads each `(id, file name)` from `dir`. Missing files load as empty
     /// documents so tweaks can still create them.
     pub fn load(dir: &Path, files: &[(&'static str, &'static str)]) -> Self {
         let mut set = Self::default();
         for &(id, name) in files {
             let path = dir.join(name);
-            let (doc, exists) = match IniDoc::load(&path) {
-                Ok(doc) => (doc, true),
-                Err(_) => (IniDoc::default(), false),
+            let (doc, exists, readable) = match std::fs::read(&path) {
+                Ok(bytes) => (IniDoc::from_bytes(&bytes), true, true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (IniDoc::default(), false, true),
+                Err(_) => (IniDoc::default(), true, false),
             };
             set.files.insert(
                 id,
@@ -40,6 +50,7 @@ impl ConfigSet {
                     path,
                     doc,
                     exists,
+                    readable,
                     dirty: false,
                 },
             );
@@ -58,6 +69,7 @@ impl ConfigSet {
                     path: PathBuf::from(id),
                     doc: doc.clone(),
                     exists: true,
+                    readable: true,
                     dirty: false,
                 },
             );
@@ -106,6 +118,12 @@ impl ConfigSet {
     /// Writes dirty files, temporarily lifting read-only locks. Files that
     /// were locked get their lock back afterwards.
     pub fn save_dirty(&mut self) -> Result<Vec<PathBuf>> {
+        if let Some(f) = self.files.values().find(|f| f.dirty && !f.readable) {
+            bail!(
+                "{} couldn't be read (is the game or another program using it?), so it wasn't changed",
+                f.path.display()
+            );
+        }
         let mut written = Vec::new();
         for file in self.files.values_mut().filter(|f| f.dirty) {
             let was_locked = backup::is_readonly(&file.path);
@@ -113,14 +131,39 @@ impl ConfigSet {
             if let Some(parent) = file.path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            file.doc.save(&file.path)?;
+            let saved = file.doc.save(&file.path);
+            // Put a lifted lock back even if the write failed.
             if was_locked {
                 backup::set_readonly(&file.path, true)?;
             }
+            saved?;
             file.dirty = false;
             file.exists = true;
             written.push(file.path.clone());
         }
         Ok(written)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_files_are_never_overwritten() {
+        let dir = std::env::temp_dir().join("vaultpatcher-unreadable-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Good.ini"), "[A]\r\nB=1\r\n").unwrap();
+        // A directory where the file should be: exists, but can't be read.
+        std::fs::create_dir_all(dir.join("Locked.ini")).unwrap();
+        let mut set = ConfigSet::load(&dir, &[("good", "Good.ini"), ("locked", "Locked.ini")]);
+        assert!(set.file("locked").is_some_and(|f| f.exists && !f.readable));
+        set.set(&Key { file: "good", section: "A", key: "B" }, "2");
+        set.set(&Key { file: "locked", section: "A", key: "B" }, "2");
+        assert!(set.save_dirty().is_err(), "must refuse to write when a target couldn't be read");
+        assert_eq!(std::fs::read_to_string(dir.join("Good.ini")).unwrap(), "[A]\r\nB=1\r\n", "nothing written at all");
+        assert!(dir.join("Locked.ini").is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

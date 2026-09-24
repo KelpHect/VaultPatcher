@@ -20,22 +20,40 @@ pub fn render(nav: &NavItem, ws: &Entity<Workspace>, _window: &mut Window, cx: &
     let categories = nav.categories;
 
     let reset_ws = ws.clone();
-    let reset_button = ui::button("reset-page", "Page defaults", Some(Icon::Undo), Variant::Secondary)
-        .on_click(move |_, _, cx| {
-            reset_ws.update(cx, |ws, cx| ws.stage_defaults(categories, cx));
+    let reset_count = def
+        .visible_tweaks()
+        .filter(|t| categories.contains(&t.category) && game.effective(t) != t.default.to_value())
+        .count();
+    let reset_button = ui::button("reset-page", "Reset tab", Some(Icon::Undo), Variant::Secondary)
+        .when(reset_count == 0, |b| b.opacity(0.45))
+        .on_click(move |_, window, cx| {
+            if reset_count == 0 {
+                return;
+            }
+            let ws = reset_ws.clone();
+            super::confirm(
+                window,
+                cx,
+                &format!("Reset {reset_count} setting(s) on this page to the game's defaults?"),
+                "They're added to your pending changes; nothing is written until you press Apply.",
+                "Reset",
+                move |cx| ws.update(cx, |ws, cx| ws.stage_defaults(categories, cx)),
+            );
         })
         .into_any_element();
 
+    // In a tab group the header names the group; the tab strip names the page.
+    let tabs = def.tab_group(state.mode(), nav.kind);
     let mut page = div().flex().flex_col().gap(px(26.)).child(page_header(
-        nav.title,
-        &format!(
-            "{} — changes are staged first; nothing touches your files until you press Apply.",
-            def.name
-        ),
+        tabs.map_or(nav.title, |g| g.title),
+        "Changes wait in the bar at the bottom until you press Apply.",
         vec![reset_button],
     ));
 
-    page = page.child(filter_bar(ws, filter));
+    if let Some(group) = tabs {
+        page = page.child(tab_strip(group, nav.kind, ws, cx));
+    }
+    page = page.child(filter_bar(ws, filter, state.settings.show_file_details));
 
     if !game.config_found() {
         page = page.child(
@@ -87,7 +105,56 @@ pub fn render(nav: &NavItem, ws: &Entity<Workspace>, _window: &mut Window, cx: &
     page.into_any_element()
 }
 
-fn filter_bar(ws: &Entity<Workspace>, current: TweakFilter) -> impl IntoElement {
+/// Tabs for the pages of a collapsed nav group (Display, Graphics, …).
+fn tab_strip(group: &'static crate::games::NavGroup, current: crate::games::PageKind, ws: &Entity<Workspace>, cx: &App) -> impl IntoElement {
+    let state = ws.read(cx);
+    let game = state.game();
+    let mut row = div().flex().flex_wrap().border_b_1().border_color(theme::line());
+    for item in group.items {
+        let active = item.kind == current;
+        let pending = game
+            .pending
+            .keys()
+            .filter(|id| game.def.tweak(id).is_some_and(|t| item.categories.contains(&t.category)))
+            .count();
+        let ws = ws.clone();
+        let kind = item.kind;
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("tab-{}", item.title)))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .h(px(40.))
+                .border_b_2()
+                .border_color(if active { theme::accent() } else { gpui::transparent_black().into() })
+                .font_family(theme::FONT_LABEL)
+                .font_weight(if active { FontWeight::BOLD } else { FontWeight::SEMIBOLD })
+                .text_size(px(15.))
+                .text_color(if active { theme::text() } else { theme::text_dim() })
+                .cursor_pointer()
+                .hover(|s| s.text_color(theme::text()))
+                .child(item.title)
+                .when(pending > 0, |d| {
+                    d.child(
+                        div()
+                            .px(px(5.))
+                            .bg(theme::accent())
+                            .text_color(theme::accent_ink())
+                            .text_size(px(12.))
+                            .child(pending.to_string()),
+                    )
+                })
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, _| crate::sound::play(crate::sound::Sound::Click))
+                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.navigate(kind, cx))),
+        );
+    }
+    row
+}
+
+fn filter_bar(ws: &Entity<Workspace>, current: TweakFilter, details: bool) -> impl IntoElement {
+    let details_ws = ws.clone();
     let mut row = div()
         .flex()
         .items_center()
@@ -96,7 +163,7 @@ fn filter_bar(ws: &Entity<Workspace>, current: TweakFilter) -> impl IntoElement 
     for (filter, text) in [
         (TweakFilter::All, "Everything"),
         (TweakFilter::Modified, "Changed from default"),
-        (TweakFilter::Staged, "Staged"),
+        (TweakFilter::Staged, "Pending"),
     ] {
         let ws = ws.clone();
         row = row.child(
@@ -110,16 +177,48 @@ fn filter_bar(ws: &Entity<Workspace>, current: TweakFilter) -> impl IntoElement 
             ),
         );
     }
-    row
+    row.child(div().flex_1()).child(
+        ui::chip("file-details", "Show file details", details).on_click(move |_, _, cx| {
+            details_ws.update(cx, |ws, cx| ws.update_settings(|s| s.show_file_details = !details, cx))
+        }),
+    )
 }
 
-fn impact_rarity(impact: Impact) -> Rarity {
-    match impact {
-        Impact::None => Rarity::Uncommon,
-        Impact::Low => Rarity::Rare,
-        Impact::Medium => Rarity::Epic,
-        Impact::High => Rarity::Legendary,
+/// "FPS cost ■■□": a neutral 0–3 pip meter. Loot-rarity colors are kept for
+/// loot-like things, never for cost.
+fn cost_meter(impact: Impact) -> Option<AnyElement> {
+    let pips = match impact {
+        Impact::None => return None,
+        Impact::Low => 1,
+        Impact::Medium => 2,
+        Impact::High => 3,
+    };
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(3.))
+        .child(
+            div()
+                .mr(px(4.))
+                .font_family(theme::FONT_LABEL)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(12.5))
+                .text_color(theme::text_dim())
+                .child("FPS COST"),
+        );
+    for i in 0..3 {
+        row = row.child(div().w(px(9.)).h(px(9.)).bg(if i < pips { theme::text_muted() } else { theme::line() }));
     }
+    Some(row.into_any_element())
+}
+
+fn meta(text: impl Into<SharedString>, color: gpui::Rgba) -> gpui::Div {
+    div()
+        .font_family(theme::FONT_LABEL)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(12.5))
+        .text_color(color)
+        .child(text.into())
 }
 
 fn location(tweak: &Tweak, ws: &Workspace) -> String {
@@ -149,23 +248,20 @@ pub(crate) fn tweak_row(tweak: &'static Tweak, ws: &Entity<Workspace>, cx: &App)
     let default = tweak.default.to_value();
     let on_disk = game.current(tweak);
 
-    let rarity = impact_rarity(tweak.impact);
-    let mut badges = div()
-        .flex()
-        .flex_wrap()
-        .gap(px(6.))
-        .child(ui::badge(tweak.impact.label(), rarity.color()));
+    let details = state.settings.show_file_details;
+    // Quiet one-line metadata instead of a row of badges.
+    let mut badges = div().flex().flex_wrap().items_center().gap(px(14.)).children(cost_meter(tweak.impact));
     if staged {
-        badges = badges.child(ui::badge("Staged", theme::accent()));
-    }
-    if tweak.flags.menu_managed {
-        badges = badges.child(ui::badge("Also in game menu", theme::echo()));
+        badges = badges.child(meta("● PENDING", theme::accent()));
     }
     if tweak.flags.experimental {
-        badges = badges.child(ui::badge("Experimental", theme::danger()));
+        badges = badges.child(meta("! EXPERIMENTAL", Rarity::Legendary.color()));
+    }
+    if tweak.flags.menu_managed {
+        badges = badges.child(meta("ALSO IN GAME MENU", theme::text_dim()));
     }
     if matches!(on_disk, Some(Value::Unknown(_))) && !staged {
-        badges = badges.child(ui::badge("Custom value", Rarity::Pearlescent.color()));
+        badges = badges.child(meta("CUSTOM VALUE", theme::echo()));
     }
 
     let info = div()
@@ -192,16 +288,18 @@ pub(crate) fn tweak_row(tweak: &'static Tweak, ws: &Entity<Workspace>, cx: &App)
         )
         .child(ui::body(tweak.description))
         .children(super::compare::strip(tweak, ws, cx))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(14.))
-                .text_size(px(11.))
-                .text_color(theme::text_dim())
-                .child(div().font_family(theme::FONT_MONO).child(location(tweak, state)))
-                .child(format!("Default: {}", default.display(&tweak.control))),
-        );
+        .when(details || value != default, |d| {
+            d.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(14.))
+                    .text_size(px(13.))
+                    .text_color(theme::text_dim())
+                    .when(details, |d| d.child(div().font_family(theme::FONT_MONO).text_size(px(12.)).child(location(tweak, state))))
+                    .when(value != default, |d| d.child(format!("Game default: {}", default.display(&tweak.control)))),
+            )
+        });
 
     let reset_ws = ws.clone();
     let reset = ui::icon_button(SharedString::from(format!("reset-{}", tweak.id)), Icon::Undo, theme::text_dim())
@@ -252,7 +350,7 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
                         .font_family(theme::FONT_LABEL)
                         .font_weight(FontWeight::BOLD)
                         .text_size(px(12.))
-                        .text_color(if on { theme::accent() } else { theme::text_dim() })
+                        .text_color(if on { theme::echo() } else { theme::text_dim() })
                         .child(if on { "ON" } else { "OFF" }),
                 )
                 .child(
@@ -279,7 +377,7 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
                 .child(ui::slider(
                     format!("s-{}", tweak.id),
                     fraction,
-                    theme::accent(),
+                    theme::text_muted(),
                     move |f, _, cx| {
                         let v = min + (max - min) * f as f64;
                         slide_ws.update(cx, |ws, cx| commit(ws, tweak, Value::Num(v), instant, cx));

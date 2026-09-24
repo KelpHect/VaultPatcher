@@ -77,6 +77,17 @@ pub fn create(game_id: &str, label: &str, files: &[PathBuf]) -> Result<Backup> {
     Ok(backup)
 }
 
+/// Label of the permanent snapshot taken before Vault Patcher first changes
+/// a game's settings. Never pruned.
+pub const ORIGINAL_LABEL: &str = "Original settings (before Vault Patcher)";
+
+pub fn load(dir: &Path) -> Option<Backup> {
+    let text = std::fs::read_to_string(dir.join("manifest.json")).ok()?;
+    let mut backup: Backup = serde_json::from_str(&text).ok()?;
+    backup.dir = dir.to_path_buf();
+    Some(backup)
+}
+
 pub fn list(game_id: &str) -> Vec<Backup> {
     let Ok(entries) = std::fs::read_dir(game_dir(game_id)) else {
         return Vec::new();

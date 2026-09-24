@@ -58,6 +58,15 @@ pub fn image_path(game_id: &str, tweak: &str, value: &Value) -> PathBuf {
     comparisons_dir().join(game_id).join(tweak).join(format!("{}.jpg", file_stem(value)))
 }
 
+/// The values whose images exist, in the same order as `images`.
+pub fn captured_values(game_id: &str, tweak: &Tweak) -> Vec<Value> {
+    capture_values(tweak)
+        .into_iter()
+        .map(|(v, _)| v)
+        .filter(|v| image_path(game_id, tweak.id, v).is_file())
+        .collect()
+}
+
 /// Captured images for a tweak, in option order: (label, path).
 pub fn images(game_id: &str, tweak: &Tweak) -> Vec<(String, PathBuf)> {
     capture_values(tweak)
@@ -196,7 +205,7 @@ build_mod(
 )
 "#;
 
-fn game_running(exe: &Path) -> bool {
+pub(crate) fn game_running(exe: &Path) -> bool {
     let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Command::new("tasklist")
         .args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"])
@@ -205,7 +214,7 @@ fn game_running(exe: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn kill_game(exe: &Path) {
+pub(crate) fn kill_game(exe: &Path) {
     if let Some(name) = exe.file_name() {
         let _ = Command::new("taskkill").args(["/IM", &name.to_string_lossy(), "/F"]).output();
     }
@@ -223,7 +232,50 @@ fn store_image(img: image::DynamicImage, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Marks the run finished however `run` exits (error or panic), so the UI
+/// never sticks in "capturing".
+struct FinishOnDrop(Arc<Mutex<CaptureProgress>>);
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        let mut p = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        p.finished = true;
+        p.done = p.total;
+        p.current.clear();
+    }
+}
+
+/// Puts the user's configs and game folder back if a run stops early
+/// (error or panic). Closes the game first so it can't write over them.
+struct RestoreOnDrop {
+    armed: bool,
+    exe: PathBuf,
+    snapshot: backup::Backup,
+    helper: PathBuf,
+    helper_settings: PathBuf,
+}
+
+impl RestoreOnDrop {
+    fn restore(&mut self) -> Result<()> {
+        self.armed = false;
+        kill_game(&self.exe);
+        let result = backup::restore(&self.snapshot).context("restoring your settings after capture");
+        let _ = fs::remove_dir_all(&self.helper);
+        let _ = fs::remove_file(&self.helper_settings);
+        result
+    }
+}
+
+impl Drop for RestoreOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.restore();
+        }
+    }
+}
+
 pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result<usize> {
+    let _finish = FinishOnDrop(progress.clone());
     let log = |msg: String| {
         if let Ok(mut p) = progress.lock() {
             p.log.push(msg);
@@ -240,10 +292,22 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
     fs::create_dir_all(helper_settings.parent().expect("has parent"))?;
     fs::write(&helper_settings, "{\n    \"enabled\": true\n}\n")?;
 
-    // One snapshot of the configs up front; restored no matter what happens.
-    let config_paths: Vec<PathBuf> = req.ini_files.iter().map(|(_, n)| req.config_dir.join(n)).filter(|p| p.exists()).collect();
+    // One snapshot of the configs up front — including files that don't exist
+    // yet, so any the capture creates are removed again — restored no matter
+    // how the run ends.
+    let config_paths: Vec<PathBuf> = req.ini_files.iter().map(|(_, n)| req.config_dir.join(n)).collect();
     let snapshot = backup::create(req.game_id, "Before comparison capture", &config_paths)?;
+    let mut guard = RestoreOnDrop {
+        armed: true,
+        exe: req.exe.clone(),
+        snapshot,
+        helper: helper.clone(),
+        helper_settings: helper_settings.clone(),
+    };
     let original = ConfigSet::load(&req.config_dir, req.ini_files);
+    if let Some(f) = original.unreadable().next() {
+        bail!("{} couldn't be read; close the game and try again", f.path.display());
+    }
 
     let result = (|| -> Result<usize> {
         let mut captured = 0;
@@ -323,14 +387,7 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
     })();
 
     // Always put the user's settings and game folder back.
-    backup::restore(&snapshot).context("restoring your settings after capture")?;
-    let _ = fs::remove_dir_all(&helper);
-    let _ = fs::remove_file(&helper_settings);
-    if let Ok(mut p) = progress.lock() {
-        p.finished = true;
-        p.done = p.total;
-        p.current.clear();
-    }
+    guard.restore()?;
     result
 }
 
@@ -462,5 +519,45 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+
+    /// A run that fails right after starting (no game exe) must still put the
+    /// configs back byte for byte, remove its helper and mark itself finished.
+    #[test]
+    fn failed_capture_restores_everything() {
+        let base = std::env::temp_dir().join("vaultpatcher-capture-fail");
+        let _ = fs::remove_dir_all(&base);
+        let config_dir = base.join("Config");
+        let root = base.join("Game");
+        fs::create_dir_all(config_dir.join("LauncherConfig")).unwrap();
+        fs::create_dir_all(root.join("sdk_mods")).unwrap();
+        let engine = "[SystemSettings]\r\nFullscreen=True\r\nBloom=True\r\n[Engine.Engine]\r\nbSubtitlesForcedOff=FALSE\r\n";
+        fs::write(config_dir.join("WillowEngine.ini"), engine).unwrap();
+        let tweak = crate::games::bl2::GAME.tweak("bloom").unwrap();
+        let progress = Arc::new(Mutex::new(CaptureProgress { total: 1, ..Default::default() }));
+        let req = CaptureRequest {
+            game_id: "test-capture",
+            root: root.clone(),
+            exe: root.join("Missing.exe"),
+            config_dir: config_dir.clone(),
+            ini_files: crate::games::willow::INI_FILES,
+            save: "Save0001.sav".into(),
+            settle_seconds: 1,
+            shots: vec![(tweak, Value::Bool(false), "Off".into())],
+        };
+        assert!(run(req, progress.clone()).is_err());
+        assert_eq!(fs::read_to_string(config_dir.join("WillowEngine.ini")).unwrap(), engine);
+        assert!(!config_dir.join("WillowGame.ini").exists(), "files the capture created are removed");
+        assert!(!root.join(HELPER_DIR).exists());
+        assert!(progress.lock().unwrap().finished);
+        for b in backup::list("test-capture") {
+            let _ = backup::delete(&b);
+        }
+        let _ = fs::remove_dir_all(&base);
     }
 }

@@ -64,7 +64,7 @@ fn capture(game_id: &str, args: &[String]) -> Result<()> {
 
     // Prerequisites, installed the same way One-Click Setup does.
     let support = def.mods.context("this game has no SDK support")?;
-    if matches!(mods::sdk_status(support, &root), SdkStatus::NotInstalled | SdkStatus::Legacy) {
+    if matches!(mods::sdk_status(def.id, support, &root), SdkStatus::NotInstalled | SdkStatus::Legacy) {
         println!("installing {}…", support.sdk_name);
         println!("  {}", mods::install_sdk_latest(def.id, support, &root)?);
     }

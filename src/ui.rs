@@ -10,6 +10,7 @@ use gpui::{
     point, prelude::*, px, relative,
 };
 
+use crate::sound::{self, Sound};
 use crate::theme::{self, Icon};
 
 pub fn icon(icon: Icon) -> gpui::Div {
@@ -35,14 +36,14 @@ pub fn label(text: impl Into<SharedString>) -> gpui::Div {
     div()
         .font_family(theme::FONT_LABEL)
         .font_weight(FontWeight::BOLD)
-        .text_size(px(12.))
+        .text_size(px(14.))
         .text_color(theme::text_muted())
         .child(SharedString::from(text.into().to_uppercase()))
 }
 
 pub fn body(text: impl Into<SharedString>) -> gpui::Div {
     div()
-        .text_size(px(14.))
+        .text_size(px(15.))
         .line_height(px(21.))
         .text_color(theme::text_muted())
         .child(text.into())
@@ -84,7 +85,7 @@ pub fn badge(text: impl Into<SharedString>, color: Rgba) -> gpui::Div {
         .text_color(color)
         .font_family(theme::FONT_LABEL)
         .font_weight(FontWeight::BOLD)
-        .text_size(px(11.))
+        .text_size(px(12.))
         .child(SharedString::from(text.into().to_uppercase()))
 }
 
@@ -122,12 +123,20 @@ pub fn button(
         .when(variant == Variant::Secondary, |d| d.border_1().border_color(theme::line()))
         .font_family(theme::FONT_LABEL)
         .font_weight(FontWeight::BOLD)
-        .text_size(px(13.))
+        .text_size(px(15.))
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
         .active(|s| s.mt(px(2.)).mb(px(-2.)))
         .when_some(icon_glyph, |d, i| d.child(icon(i).text_size(px(13.))))
         .child(SharedString::from(text.into().to_uppercase()))
+        .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
+        .when(primary, |d| {
+            d.on_hover(|hovered, _, _| {
+                if *hovered {
+                    sound::play(Sound::Hover)
+                }
+            })
+        })
 }
 
 /// A square icon-only button (window chrome, list actions).
@@ -143,6 +152,7 @@ pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, tooltip_color: Rgba) -
         .cursor_pointer()
         .hover(|s| s.bg(theme::panel_hi()))
         .child(icon(glyph).text_size(px(12.)))
+        .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
 }
 
 pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<gpui::Div> {
@@ -154,25 +164,21 @@ pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<gpui::Div> {
         .w(px(54.))
         .h(px(26.))
         .p(px(2.))
-        .border_2()
-        .border_color(theme::ink())
-        .bg(if on { theme::accent() } else { theme::panel_lo() })
+        .border_1()
+        .border_color(if on { theme::echo() } else { theme::text_dim() })
+        .bg(if on { theme::with_alpha(theme::echo(), 0.22) } else { theme::panel_lo().into() })
         .when(on, |d| d.justify_end())
         .cursor_pointer()
-        .child(
-            div()
-                .size(px(18.))
-                .bg(if on { theme::accent_ink() } else { theme::text_dim() })
-                .border_1()
-                .border_color(theme::ink()),
-        )
+        .child(div().size(px(18.)).bg(if on { theme::echo() } else { theme::text_dim() }))
+        .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
 }
 
 /// Marker type carried by slider drags so each slider only reacts to its own.
 #[derive(Clone)]
 pub struct SliderDrag(pub SharedString);
 
-struct EmptyView;
+/// Invisible drag preview for drag interactions that draw their own feedback.
+pub struct EmptyView;
 
 impl Render for EmptyView {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -227,7 +233,7 @@ pub fn slider(
                 .bg(theme::bg_deep())
                 .border_2()
                 .border_color(theme::ink())
-                .child(div().h_full().w(relative(fraction)).bg(accent)),
+                .child(div().h_full().w(relative(fraction)).bg(theme::with_alpha(accent, 0.75))),
         )
         // knob
         .child(
@@ -266,15 +272,19 @@ pub fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, selected: b
         .flex()
         .items_center()
         .border_1()
-        .border_color(if selected { theme::accent() } else { theme::line() })
-        .bg(if selected { theme::accent() } else { theme::panel_lo() })
-        .text_color(if selected { theme::accent_ink() } else { theme::text_muted() })
+        .border_color(if selected { theme::text_dim() } else { theme::line() })
+        // Selected options are a raised surface with a yellow underline;
+        // solid yellow is reserved for actions (buttons).
+        .when(selected, |d| d.border_b_2().border_color(theme::accent()))
+        .bg(if selected { theme::panel_hi() } else { theme::panel_lo() })
+        .text_color(if selected { theme::text() } else { theme::text_muted() })
         .font_family(theme::FONT_LABEL)
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_size(px(13.))
+        .font_weight(if selected { FontWeight::BOLD } else { FontWeight::SEMIBOLD })
+        .text_size(px(14.5))
         .cursor_pointer()
         .when(!selected, |d| d.hover(|s| s.bg(theme::panel_hi()).text_color(theme::text())))
         .child(text.into())
+        .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
 }
 
 /// Diagonal hazard stripes painted across the element's bounds.
@@ -313,7 +323,7 @@ pub fn section_title(title: impl Into<SharedString>, subtitle: Option<SharedStri
             div()
                 .font_family(theme::FONT_LABEL)
                 .font_weight(FontWeight::BOLD)
-                .text_size(px(20.))
+                .text_size(px(23.))
                 .text_color(theme::text())
                 .child(title.into()),
         )
@@ -332,7 +342,7 @@ pub fn kv_row(key: impl Into<SharedString>, value: impl Into<SharedString>) -> g
                 .flex_1()
                 .min_w_0()
                 .font_family(theme::FONT_MONO)
-                .text_size(px(12.5))
+                .text_size(px(13.5))
                 .text_color(theme::text())
                 .child(value.into()),
         )

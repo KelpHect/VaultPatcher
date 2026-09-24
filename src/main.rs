@@ -9,6 +9,7 @@ mod games;
 mod mods;
 mod pages;
 mod setup;
+mod sound;
 mod textmod;
 mod patches;
 mod theme;
@@ -30,8 +31,9 @@ fn main() {
     }
     Application::new().run(|cx: &mut App| {
         cx.text_system()
-            .add_fonts(vec![Cow::Borrowed(include_bytes!("../assets/fonts/Bangers-Regular.ttf"))])
-            .expect("bundled font should load");
+            .add_fonts(theme::FONT_FILES.iter().map(|f| Cow::Borrowed(*f)).collect())
+            .expect("bundled fonts should load");
+        theme::set_palette(workspace::AppSettings::load().palette);
 
         let bounds = Bounds::centered(None, size(px(1380.), px(900.)), cx);
         cx.open_window(

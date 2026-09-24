@@ -62,7 +62,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         )
                         .when(game.install.is_some(), |d| {
                             d.child(
-                                ui::button("ov-launch", "Launch", Some(Icon::Play), Variant::Primary)
+                                ui::button("ov-launch", "Play", Some(Icon::Play), Variant::Primary)
                                     .on_click(move |_, _, cx| launch_ws.update(cx, |ws, cx| ws.launch(cx))),
                             )
                         }),
@@ -152,14 +152,15 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .count();
     let preset_ws = ws.clone();
     cards = cards.child(stat_card(
-        "Tweaks",
+        "Game settings",
         Icon::Sliders,
         if game.pending.is_empty() { theme::echo() } else { theme::accent() },
-        &format!("{} staged", game.pending.len()),
-        format!(
-            "{modified} of {} settings differ from the game's defaults",
-            def.visible_tweaks().count()
-        ),
+        &format!("{modified} of {} changed", def.visible_tweaks().count()),
+        if game.pending.is_empty() {
+            "Nothing waiting to apply".to_string()
+        } else {
+            format!("{} waiting to apply", game.pending.len())
+        },
         Some(
             ui::button("ov-presets", "Presets", Some(Icon::Star), Variant::Ghost)
                 .on_click(move |_, _, cx| preset_ws.update(cx, |ws, cx| ws.navigate(PageKind::Presets, cx)))
@@ -204,20 +205,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
 
     page = page.child(cards);
 
-    // Tips
-    page = page.child(
-        ui::card(theme::echo()).child(
-            ui::card_body()
-                .p(px(18.))
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .child(ui::label("How Vault Patcher works").text_color(theme::echo()))
-                .child(ui::body("1. Pick settings on the tweak pages or stage a preset. Nothing is written yet."))
-                .child(ui::body("2. Press Apply in the bar at the bottom. Every file is snapshotted first, and only the lines being changed are edited."))
-                .child(ui::body("3. Changed your mind? Restore any snapshot from Backups, or reset single tweaks to their defaults.")),
-        ),
-    );
+    page = page.child(super::launch::section(ws, cx));
 
     page.into_any_element()
 }

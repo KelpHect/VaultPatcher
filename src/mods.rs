@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 use crate::core::manifest::{self, Manifest};
-use crate::core::{backup, net};
+use crate::core::net;
 use crate::games::ModSupport;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub struct ModEntry {
 
 const SDK: &str = "sdk";
 
-pub fn sdk_status(support: &ModSupport, root: &Path) -> SdkStatus {
+pub fn sdk_status(game_id: &str, support: &ModSupport, root: &Path) -> SdkStatus {
     let present = support.sdk_markers.iter().any(|m| root.join(m).exists());
     if !present {
         if support.legacy_markers.iter().any(|m| root.join(m).exists()) {
@@ -67,13 +67,10 @@ pub fn sdk_status(support: &ModSupport, root: &Path) -> SdkStatus {
         }
         return SdkStatus::NotInstalled;
     }
-    for game in crate::games::all() {
-        if game.mods.is_some_and(|m| std::ptr::eq(m, support))
-            && let Some(m) = manifest::read(game.id, SDK) {
-                return SdkStatus::Installed(m.version);
-            }
+    match manifest::read(game_id, SDK) {
+        Some(m) => SdkStatus::Installed(m.version),
+        None => SdkStatus::Detected,
     }
-    SdkStatus::Detected
 }
 
 fn disabled_dir(dir: &Path) -> PathBuf {
@@ -273,9 +270,8 @@ fn install_sdk_zip_versioned(
         }
         targets.push((i, target));
     }
-    if !overwritten.is_empty() {
-        backup::create(game_id, &format!("Before installing {}", support.sdk_name), &overwritten)?;
-    }
+    let replaced =
+        manifest::plan_replace(game_id, SDK, &format!("Before installing {}", support.sdk_name), &overwritten)?;
 
     let mut written = Vec::new();
     for (i, target) in targets {
@@ -299,6 +295,7 @@ fn install_sdk_zip_versioned(
         &Manifest {
             version: version.to_string(),
             files: written.into_iter().filter(|p| !p.starts_with(&settings)).collect(),
+            replaced,
         },
     )?;
     fs::create_dir_all(&sdk_mods).ok();
@@ -454,7 +451,7 @@ mod tests {
         let tag = install_sdk_latest("sandbox", support, &root).unwrap();
         println!("installed SDK {tag}");
         assert!(root.join("Binaries/Win32/ddraw.dll").is_file());
-        assert_eq!(sdk_status(support, &root), SdkStatus::Detected);
+        assert_eq!(sdk_status("sandbox", support, &root), SdkStatus::Installed(tag.clone()));
         let mods = scan(support, &root);
         assert!(mods.iter().any(|m| m.core), "core SDK mods should be listed as core");
         uninstall_sdk("sandbox", support, &root).unwrap();

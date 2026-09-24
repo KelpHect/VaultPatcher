@@ -169,13 +169,36 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         );
 
     let mut list = ui::panel().flex().flex_col();
-    if game.mods.is_empty() {
-        list = list.child(div().p(px(20.)).child(ui::body(
-            "No mods yet. Use Add mods… to install .sdkmod, .zip, .blcm or .txt files.",
+    // The SDK's own modules are one summary line, so the player's mods lead.
+    let core = game.mods.iter().filter(|m| m.core).count();
+    if core > 0 {
+        list = list.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .px(px(16.))
+                .py(px(12.))
+                .child(ui::icon(Icon::Check).text_color(theme::success()).text_size(px(13.)))
+                .child(
+                    div()
+                        .font_family(theme::FONT_LABEL)
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(px(15.))
+                        .text_color(theme::text())
+                        .child(format!("SDK core modules ({core})")),
+                )
+                .child(ui::body("Part of the mod loader; always on.").text_color(theme::text_dim())),
+        );
+    }
+    let user_mods: Vec<_> = game.mods.iter().filter(|m| !m.core).collect();
+    if user_mods.is_empty() {
+        list = list.child(div().h(px(1.)).bg(theme::line())).child(div().p(px(20.)).child(ui::body(
+            "No mods of your own yet. Use Add mods… to install .sdkmod, .zip, .blcm or .txt files.",
         )));
     }
-    for (i, m) in game.mods.iter().enumerate() {
-        if i > 0 {
+    for (i, m) in user_mods.into_iter().enumerate() {
+        if i > 0 || core > 0 {
             list = list.child(div().h(px(1.)).bg(theme::line()));
         }
         let kind_color = match m.kind {
@@ -186,6 +209,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         let remove_ws = ws.clone();
         let enabled = m.enabled;
         let name = m.name.clone();
+        let toggle_path = m.path.clone();
+        let remove_path = m.path.clone();
         let mut row = div()
             .flex()
             .items_center()
@@ -232,19 +257,20 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             row = row
                 .child(
                     ui::toggle(SharedString::from(format!("mod-{i}")), enabled)
-                        .on_click(move |_, _, cx| toggle_ws.update(cx, |ws, cx| ws.set_mod_enabled(i, !enabled, cx))),
+                        .on_click(move |_, _, cx| toggle_ws.update(cx, |ws, cx| ws.set_mod_enabled(toggle_path.clone(), !enabled, cx))),
                 )
                 .child(
                     ui::icon_button(SharedString::from(format!("mod-del-{i}")), Icon::Delete, theme::danger()).on_click(
                         move |_, window, cx| {
                             let ws = remove_ws.clone();
+                            let path = remove_path.clone();
                             confirm(
                                 window,
                                 cx,
                                 &format!("Delete {name}?"),
                                 "This permanently removes the mod's files.",
                                 "Delete",
-                                move |cx| ws.update(cx, |ws, cx| ws.remove_mod(i, cx)),
+                                move |cx| ws.update(cx, |ws, cx| ws.remove_mod(path, cx)),
                             );
                         },
                     ),

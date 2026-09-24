@@ -86,9 +86,24 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             }),
         );
     }
+    let current = crate::theme::palette();
+    let mut theme_chips = div().flex().flex_wrap().justify_end().gap(px(6.));
+    for palette in crate::theme::Palette::ALL {
+        let ws = ws.clone();
+        theme_chips = theme_chips.child(
+            ui::chip(SharedString::from(format!("palette-{}", palette.label())), palette.label(), current == palette)
+                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.set_palette(palette, cx))),
+        );
+    }
     let behavior = ui::panel()
         .flex()
         .flex_col()
+        .child(setting_row(
+            "Theme",
+            "Vault Hunter is the modern dark look; Pandora is the original warm browns; Hyperion goes corporate navy.",
+            theme_chips.into_any_element(),
+        ))
+        .child(div().h(px(1.)).bg(theme::line()))
         .child(setting_row(
             "Lock config files after applying",
             "Marks ini files read-only after every apply so nothing can revert them. The in-game options menu can't save while locked.",
@@ -132,10 +147,24 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .flex_col()
         .gap(px(22.))
         .child(page_header("App Settings", "Preferences for Vault Patcher itself.", vec![]))
-        .child(ui::section_title(format!("{} paths", def.short), None))
+        .child(ui::section_title(format!("{} folders", def.name), None))
         .child(paths)
         .child(ui::section_title("Behavior", None))
         .child(behavior)
+        .when(!def.comparisons.is_empty(), |d| {
+            let ws = ws.clone();
+            d.child(ui::section_title("Tools", None)).child(
+                ui::panel().child(setting_row(
+                    "Comparison Capture",
+                    "Re-shoot the comparison screenshots on this PC (takes about 30 minutes; the game runs on its own).",
+                    ui::button("open-capture", "Open", Some(Icon::Camera), Variant::Secondary)
+                        .on_click(move |_, _, cx| {
+                            ws.update(cx, |ws, cx| ws.navigate(crate::games::PageKind::Capture, cx))
+                        })
+                        .into_any_element(),
+                )),
+            )
+        })
         .child(about)
         .into_any_element()
 }

@@ -7,6 +7,18 @@ use anyhow::{Context as _, Result};
 
 const USER_AGENT: &str = concat!("VaultPatcher/", env!("CARGO_PKG_VERSION"));
 
+/// Shared agent with timeouts, so a stalled connection fails instead of
+/// hanging a setup run forever.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(60))
+            .build()
+    })
+}
+
 pub struct ReleaseAsset {
     pub tag: String,
     pub name: String,
@@ -17,7 +29,7 @@ pub struct ReleaseAsset {
 /// satisfies `pick`.
 pub fn latest_asset(repo: &str, pick: impl Fn(&str) -> bool) -> Result<ReleaseAsset> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let release: serde_json::Value = ureq::get(&url)
+    let release: serde_json::Value = agent().get(&url)
         .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -39,7 +51,7 @@ pub fn latest_asset(repo: &str, pick: impl Fn(&str) -> bool) -> Result<ReleaseAs
 }
 
 pub fn download(url: &str, dest: &Path) -> Result<()> {
-    let mut reader = ureq::get(url)
+    let mut reader = agent().get(url)
         .set("User-Agent", USER_AGENT)
         .call()
         .with_context(|| format!("downloading {url}"))?

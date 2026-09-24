@@ -736,7 +736,7 @@ const HD: Component = Component {
         summary: "Beyond-Ultra draw distance, shadows and textures",
         description: "Pushes past the in-game Ultra: maximum view distance and detail, 4K-class shadow maps and a bigger texture streaming pool.",
         group: Group::Performance,
-        recommended: true,
+        recommended: false,
         kind: ComponentKind::Settings { values: HD_UPGRADE, display: None },
         requires: &[],
 };

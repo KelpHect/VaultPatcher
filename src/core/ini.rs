@@ -19,6 +19,9 @@ pub enum Encoding {
     Utf8,
     Utf8Bom,
     Utf16Le,
+    /// Not valid UTF-8 (e.g. Windows-1252): each byte maps to one char and
+    /// back, so the file round-trips byte for byte.
+    Latin1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,16 +103,14 @@ impl IniDoc {
         } else if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
             (String::from_utf8_lossy(&bytes[3..]).into_owned(), Encoding::Utf8Bom)
         } else {
-            (String::from_utf8_lossy(bytes).into_owned(), Encoding::Utf8)
+            match std::str::from_utf8(bytes) {
+                Ok(text) => (text.to_string(), Encoding::Utf8),
+                Err(_) => (bytes.iter().map(|&b| b as char).collect(), Encoding::Latin1),
+            }
         };
         let mut doc = Self::parse(&text);
         doc.encoding = encoding;
         doc
-    }
-
-    pub fn load(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        Ok(Self::from_bytes(&bytes))
     }
 
     pub fn to_text(&self) -> String {
@@ -147,6 +148,7 @@ impl IniDoc {
                 out.extend_from_slice(text.as_bytes());
                 out
             }
+            Encoding::Latin1 => text.chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }).collect(),
             Encoding::Utf16Le => {
                 let mut out = vec![0xFF, 0xFE];
                 for unit in text.encode_utf16() {
@@ -399,6 +401,16 @@ mod tests {
         assert_eq!(doc.get_all("FullScreenMovie", "StartupMovies").len(), 2);
         assert!(doc.remove_value("FullScreenMovie", "StartupMovies", "loading"));
         assert_eq!(doc.remove("FullScreenMovie", "StartupMovies"), 1);
+    }
+
+    #[test]
+    fn ansi_files_round_trip_byte_for_byte() {
+        let bytes = b"[A]\r\nName=Caf\xe9 \xa9 2K\r\n".to_vec();
+        let mut doc = IniDoc::from_bytes(&bytes);
+        assert_eq!(doc.to_bytes(), bytes);
+        doc.set("A", "Other", "1");
+        let out = doc.to_bytes();
+        assert!(out.windows(4).any(|w| w == b"Caf\xe9"));
     }
 
     #[test]

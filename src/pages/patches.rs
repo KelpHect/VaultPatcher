@@ -56,7 +56,16 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         let ws = ws.clone();
                         let id = patch.id;
                         Some(
-                            ui::button(SharedString::from(format!("patch-{id}")), "Apply", Some(Icon::Wrench), Variant::Primary)
+                            ui::button(
+                                SharedString::from(format!("patch-{id}")),
+                                "Apply",
+                                Some(Icon::Wrench),
+                                if sdk_installed && !matches!(patch.kind, crate::patches::ExePatchKind::LargeAddressAware) {
+                                    Variant::Secondary
+                                } else {
+                                    Variant::Primary
+                                },
+                            )
                                 .on_click(move |_, window, cx| {
                                     let ws = ws.clone();
                                     confirm(
