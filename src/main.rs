@@ -11,7 +11,9 @@ mod pages;
 mod setup;
 mod sound;
 mod textmod;
+mod health;
 mod patches;
+mod profiles;
 mod theme;
 mod tweaks;
 mod ui;
@@ -29,13 +31,16 @@ fn main() {
     if let Some(code) = cli::run(&args) {
         std::process::exit(code);
     }
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(theme::Assets).run(|cx: &mut App| {
         cx.text_system()
             .add_fonts(theme::FONT_FILES.iter().map(|f| Cow::Borrowed(*f)).collect())
             .expect("bundled fonts should load");
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         theme::set_palette(workspace::AppSettings::load().palette);
+        theme::apply(cx);
 
-        let bounds = Bounds::centered(None, size(px(1380.), px(900.)), cx);
+        let bounds = Bounds::centered(None, size(px(1240.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -44,12 +49,15 @@ fn main() {
                     appears_transparent: true,
                     traffic_light_position: None,
                 }),
-                window_min_size: Some(size(px(1100.), px(700.))),
+                window_min_size: Some(size(px(960.), px(600.))),
                 window_background: WindowBackgroundAppearance::Opaque,
                 app_id: Some("VaultPatcher".into()),
                 ..Default::default()
             },
-            |_, cx| cx.new(app::Shell::new),
+            |window, cx| {
+                let shell = cx.new(|cx| app::Shell::new(window, cx));
+                cx.new(|cx| gpui_component::Root::new(shell, window, cx))
+            },
         )
         .expect("failed to open the main window");
         cx.activate(true);

@@ -186,7 +186,8 @@ fn sdkmod_metadata(path: &Path) -> Meta {
 fn pyproject_metadata(text: &str) -> Meta {
     let mut in_project = false;
     let (mut name, mut version, mut description) = (None, None, None);
-    for line in text.lines() {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
         let line = line.trim();
         if line.starts_with('[') {
             in_project = line == "[project]";
@@ -196,11 +197,31 @@ fn pyproject_metadata(text: &str) -> Meta {
             continue;
         }
         let Some((k, v)) = line.split_once('=') else { continue };
-        let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
+        let v = v.trim();
+        // Multi-line strings ("""…""" or '''…''') with `\` line continuations.
+        let v = match [r#"""""#, "'''"].into_iter().find(|q| v.starts_with(q)) {
+            Some(q) => {
+                let mut body = v[3..].to_string();
+                while !body.contains(q) {
+                    let Some(next) = lines.next() else { break };
+                    body.push('\n');
+                    body.push_str(next);
+                }
+                body.split(q)
+                    .next()
+                    .unwrap_or_default()
+                    .lines()
+                    .map(|l| l.trim().trim_end_matches('\\').trim())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            None => v.trim_matches('"').trim_matches('\'').to_string(),
+        };
         match k.trim() {
             "name" => name = Some(v),
             "version" => version = Some(v),
-            "description" => description = Some(v),
+            "description" => description = Some(v).filter(|d| !d.is_empty()),
             _ => {}
         }
     }
@@ -439,6 +460,9 @@ mod tests {
             "[build-system]\nname = \"x\"\n[project]\nname = \"Cool Mod\"\nversion = \"1.2\"\ndescription = 'Does things'\n",
         );
         assert_eq!(meta, (Some("Cool Mod".into()), Some("1.2".into()), Some("Does things".into())));
+        let multi = pyproject_metadata("[project]\nname = \"Quick\"\ndescription = \"\"\"\\\n    Loads straight\n    into a save.\"\"\"\nversion = \"1\"\n");
+        assert_eq!(multi.2.as_deref(), Some("Loads straight into a save."));
+        assert_eq!(multi.1.as_deref(), Some("1"));
     }
 
     #[test]

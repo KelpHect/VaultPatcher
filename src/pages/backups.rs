@@ -2,7 +2,7 @@
 //! mode, where it acts as the app's undo.
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window,
+    AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window,
     div, prelude::*, px,
 };
 
@@ -86,13 +86,12 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             div()
                 .flex()
                 .items_center()
-                .gap(px(14.))
-                .px(px(18.))
-                .py(px(13.))
+                .gap(px(12.))
+                .px(px(16.))
+                .py(px(10.))
                 .child(
                     ui::icon(if original { Icon::Star } else { Icon::History })
-                        .text_color(if original { theme::accent() } else { theme::text_dim() })
-                        .text_size(px(17.)),
+                        .text_color(if original { theme::accent() } else { theme::text_dim() }),
                 )
                 .child(
                     div()
@@ -106,25 +105,18 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .flex()
                                 .gap(px(10.))
                                 .items_baseline()
-                                .child(
-                                    div()
-                                        .font_family(theme::FONT_LABEL)
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_size(px(16.))
-                                        .text_color(theme::text())
-                                        .child(b.label.clone()),
-                                )
-                                .child(div().text_size(px(13.)).text_color(theme::text_dim()).child(b.created_at.clone()))
+                                .child(ui::title(b.label.clone()))
+                                .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(b.created_at.clone()))
                                 .when(repeats > 1, |d| {
                                     d.child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(px(12.))
                                             .text_color(theme::text_dim())
                                             .child(format!("· newest of {repeats}")),
                                     )
                                 }),
                         )
-                        .child(div().text_size(px(13.)).text_color(theme::text_muted()).child(file_list(b))),
+                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(file_list(b))),
                 )
                 .child(
                     ui::button(SharedString::from(format!("bk-restore-{i}")), "Restore", Some(Icon::Undo), Variant::Secondary)
@@ -144,6 +136,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .when(!original, |d| {
                     d.child(
                         ui::icon_button(SharedString::from(format!("bk-del-{i}")), Icon::Delete, theme::text_dim())
+                            .tooltip(ui::tip("Delete this backup"))
                             .on_click(move |_, window, cx| {
                                 let ws = delete_ws.clone();
                                 let dir = delete_dir.clone();

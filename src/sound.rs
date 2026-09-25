@@ -76,20 +76,28 @@ pub fn init(audio_dir: Option<&Path>, muted: bool, music: bool) {
     std::thread::Builder::new()
         .name("vault-audio".into())
         .spawn(move || {
-            use rodio::{Decoder, OutputStream, Sink, Source};
-            // The stream must live on this thread for as long as we play.
-            let Ok((_stream, handle)) = OutputStream::try_default() else {
-                AVAILABLE.store(false, Ordering::Relaxed);
-                return;
+            use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+            use std::sync::mpsc::RecvTimeoutError;
+            use std::time::Duration;
+            // An open output stream keeps the audio engine mixing (CPU and a
+            // device thread) even in silence, so it's opened on demand and
+            // closed again after a few quiet seconds unless music is playing.
+            let mut stream: Option<(OutputStream, OutputStreamHandle)> = None;
+            let open = |stream: &mut Option<(OutputStream, OutputStreamHandle)>| -> Option<OutputStreamHandle> {
+                if stream.is_none() {
+                    *stream = OutputStream::try_default().ok();
+                }
+                stream.as_ref().map(|(_, h)| h.clone())
             };
             let mut music_sink: Option<Sink> = None;
-            let start_music = |on: bool, sink: &mut Option<Sink>| {
+            let start_music = |on: bool, sink: &mut Option<Sink>, stream: &mut Option<(OutputStream, OutputStreamHandle)>| {
                 if let Some(s) = sink.take() {
                     s.stop();
                 }
                 if on
                     && let Some(bytes) = &music_bytes
                     && let Ok(source) = Decoder::new(Cursor::new(bytes.clone()))
+                    && let Some(handle) = open(stream)
                     && let Ok(s) = Sink::try_new(&handle)
                 {
                     s.set_volume(0.25);
@@ -97,20 +105,28 @@ pub fn init(audio_dir: Option<&Path>, muted: bool, music: bool) {
                     *sink = Some(s);
                 }
             };
-            start_music(music && !muted, &mut music_sink);
-            for command in rx {
-                match command {
-                    Command::Play(sound) => {
+            start_music(music && !muted, &mut music_sink, &mut stream);
+            loop {
+                let idle = if stream.is_some() && music_sink.is_none() { Duration::from_secs(5) } else { Duration::from_secs(3600) };
+                match rx.recv_timeout(idle) {
+                    Ok(Command::Play(sound)) => {
                         if MUTED.load(Ordering::Relaxed) {
                             continue;
                         }
                         if let Some((_, bytes)) = clips.iter().find(|(s, _)| *s == sound)
                             && let Ok(source) = Decoder::new(Cursor::new(bytes.clone()))
+                            && let Some(handle) = open(&mut stream)
                         {
                             let _ = handle.play_raw(source.amplify(sound.volume()).convert_samples());
                         }
                     }
-                    Command::Music(on) => start_music(on, &mut music_sink),
+                    Ok(Command::Music(on)) => start_music(on, &mut music_sink, &mut stream),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if music_sink.is_none() {
+                            stream = None;
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
         })

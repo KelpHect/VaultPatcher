@@ -73,9 +73,6 @@ pub struct NavItem {
 pub struct NavGroup {
     pub title: &'static str,
     pub items: &'static [NavItem],
-    /// When set, the sidebar shows the group as a single entry (with this
-    /// icon) and the pages become tabs along the top of the page.
-    pub tabs: Option<Icon>,
 }
 
 /// Information about the game's Python SDK / mod manager support.
@@ -180,13 +177,6 @@ impl GameDef {
         self.nav_for(mode).iter().flat_map(|g| g.items.iter())
     }
 
-    /// The tab group a page belongs to, if it's shown as tabs.
-    pub fn tab_group(&self, mode: Mode, page: PageKind) -> Option<&'static NavGroup> {
-        self.nav_for(mode)
-            .iter()
-            .find(|g| g.tabs.is_some() && g.items.iter().any(|i| i.kind == page))
-    }
-
     pub fn comparison(&self, tweak: &str) -> Option<&'static crate::compare::Comparison> {
         self.comparisons.iter().find(|c| c.tweak == tweak)
     }
@@ -206,7 +196,6 @@ pub fn all() -> &'static [&'static GameDef] {
 pub const SIMPLE_NAV: &[NavGroup] = &[
     NavGroup {
         title: "Get Started",
-        tabs: None,
         items: &[
             NavItem {
                 kind: PageKind::Setup,
@@ -227,8 +216,7 @@ pub const SIMPLE_NAV: &[NavGroup] = &[
 
 /// Navigation shared by every game after its own pages.
 pub const COMMON_NAV: NavGroup = NavGroup {
-    title: "Vault",
-    tabs: None,
+    title: "Maintenance",
     items: &[
         NavItem {
             kind: PageKind::Backups,

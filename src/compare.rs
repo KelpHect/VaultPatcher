@@ -58,12 +58,26 @@ pub fn image_path(game_id: &str, tweak: &str, value: &Value) -> PathBuf {
     comparisons_dir().join(game_id).join(tweak).join(format!("{}.jpg", file_stem(value)))
 }
 
+/// Pages ask which images exist on every render, so file checks are cached
+/// until something writes images (a pack download, a capture, previews).
+static EXISTS: Mutex<Option<std::collections::HashMap<PathBuf, bool>>> = Mutex::new(None);
+
+fn exists(path: &Path) -> bool {
+    let mut cache = EXISTS.lock().unwrap_or_else(|e| e.into_inner());
+    *cache.get_or_insert_with(Default::default).entry(path.to_path_buf()).or_insert_with(|| path.is_file())
+}
+
+/// Forget cached file checks after images were added or removed.
+pub fn invalidate_images() {
+    *EXISTS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// The values whose images exist, in the same order as `images`.
 pub fn captured_values(game_id: &str, tweak: &Tweak) -> Vec<Value> {
     capture_values(tweak)
         .into_iter()
         .map(|(v, _)| v)
-        .filter(|v| image_path(game_id, tweak.id, v).is_file())
+        .filter(|v| exists(&image_path(game_id, tweak.id, v)))
         .collect()
 }
 
@@ -72,8 +86,58 @@ pub fn images(game_id: &str, tweak: &Tweak) -> Vec<(String, PathBuf)> {
     capture_values(tweak)
         .into_iter()
         .map(|(v, label)| (label, image_path(game_id, tweak.id, &v)))
-        .filter(|(_, p)| p.is_file())
+        .filter(|(_, p)| exists(p))
         .collect()
+}
+
+/// Width of the preview copies used in the settings pages. Full-size images
+/// (1600px) are only decoded for the full-window viewer.
+const PREVIEW_WIDTH: u32 = 640;
+
+fn preview_dir() -> PathBuf {
+    backup::data_dir().join("previews")
+}
+
+/// The small copy of a comparison image, or the image itself until the
+/// preview has been made.
+pub fn preview(full: &Path) -> PathBuf {
+    let small = full.strip_prefix(comparisons_dir()).map(|rel| preview_dir().join(rel));
+    match small {
+        Ok(p) if exists(&p) => p,
+        _ => full.to_path_buf(),
+    }
+}
+
+/// Makes any missing preview copies for a game's images. Returns how many
+/// were written. Runs off the UI thread.
+pub fn make_previews(game_id: &str) -> usize {
+    let root = comparisons_dir().join(game_id);
+    let mut made = 0;
+    for tweak_dir in fs::read_dir(&root).into_iter().flatten().flatten() {
+        for entry in fs::read_dir(tweak_dir.path()).into_iter().flatten().flatten() {
+            let full = entry.path();
+            if full.extension().is_none_or(|e| e != "jpg") {
+                continue;
+            }
+            let Ok(rel) = full.strip_prefix(comparisons_dir()) else { continue };
+            let small = preview_dir().join(rel);
+            let fresh = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
+            if fresh(&small).is_some_and(|s| fresh(&full).is_some_and(|f| s >= f)) {
+                continue;
+            }
+            let Ok(img) = image::open(&full) else { continue };
+            let img = img.resize(PREVIEW_WIDTH, u32::MAX, image::imageops::FilterType::Triangle);
+            if fs::create_dir_all(small.parent().expect("has parent")).is_ok()
+                && img.to_rgb8().save_with_format(&small, image::ImageFormat::Jpeg).is_ok()
+            {
+                made += 1;
+            }
+        }
+    }
+    if made > 0 {
+        invalidate_images();
+    }
+    made
 }
 
 // ---- capture ---------------------------------------------------------------------
@@ -205,13 +269,43 @@ build_mod(
 )
 "#;
 
+/// Whether a process with the exe's file name is running. Uses a Toolhelp
+/// snapshot (no child process, well under a millisecond).
+#[cfg(windows)]
 pub(crate) fn game_running(exe: &Path) -> bool {
-    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains(&name.to_ascii_lowercase()))
-        .unwrap_or(false)
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    let Some(name) = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    // SAFETY: standard snapshot walk; the handle is closed before returning.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        let mut ok = Process32FirstW(snap, &mut entry) != 0;
+        while ok {
+            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase() == name {
+                found = true;
+                break;
+            }
+            ok = Process32NextW(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+        found
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn game_running(_exe: &Path) -> bool {
+    false
 }
 
 pub(crate) fn kill_game(exe: &Path) {
@@ -229,6 +323,7 @@ fn store_image(img: image::DynamicImage, dest: &Path) -> Result<()> {
     };
     fs::create_dir_all(dest.parent().expect("has parent"))?;
     img.to_rgb8().save_with_format(dest, image::ImageFormat::Jpeg)?;
+    invalidate_images();
     Ok(())
 }
 
@@ -412,6 +507,7 @@ pub fn download_pack(game_id: &str) -> Result<usize> {
     crate::core::net::download(&pack_url(game_id), &tmp)?;
     let count = unpack_pack(&tmp, &comparisons_dir().join(game_id));
     fs::remove_file(&tmp).ok();
+    invalidate_images();
     count
 }
 

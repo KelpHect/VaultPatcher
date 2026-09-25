@@ -1,92 +1,100 @@
-//! Reusable widgets in the Vault Patcher style. Everything here is a plain
+//! Reusable widgets. Metrics follow Windows 11 / Fluent: 32px buttons, 4px
+//! radius, 13–14px body text, sentence-case labels. Everything here is a plain
 //! builder function so pages can compose them freely.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, ContentMask, ElementId, FontWeight, IntoElement, MouseButton, ParentElement,
-    PathBuilder, Pixels, Render, Rgba, SharedString, Stateful, Styled, Window, canvas, div,
-    point, prelude::*, px, relative,
+    AnyElement, App, Bounds, ElementId, FontWeight, IntoElement, MouseButton, ParentElement, Pixels, Render, Rgba,
+    SharedString, Stateful, Styled, Window, canvas, div, prelude::*, px, relative, svg,
 };
 
 use crate::sound::{self, Sound};
 use crate::theme::{self, Icon};
 
-pub fn icon(icon: Icon) -> gpui::Div {
-    div()
-        .font_family(theme::FONT_ICON)
-        .flex_none()
-        .child(icon.glyph())
+/// A 16px line icon; size with `.size(px(..))`, color with `.text_color(..)`.
+pub fn icon(icon: Icon) -> gpui::Svg {
+    svg().path(icon.path()).size(px(16.)).flex_none().text_color(theme::text_muted())
 }
 
-/// Big comic display heading. Reserve it for page titles and the hero —
-/// used everywhere it stops being special.
+/// Page and game titles (condensed display face).
 pub fn display(text: impl Into<SharedString>, size: f32) -> gpui::Div {
     div()
-        .font_family(theme::FONT_DISPLAY)
+        .font_family(theme::FONT_TITLE)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_size(px(size))
-        .line_height(px(size * 1.05))
-        .text_color(theme::accent())
+        .line_height(px(size * 1.15))
+        .text_color(theme::text())
         .child(text.into())
 }
 
-/// Condensed uppercase label used for section titles and buttons.
+/// Small uppercase group header ("ESSENTIALS", "DISPLAY").
 pub fn label(text: impl Into<SharedString>) -> gpui::Div {
     div()
-        .font_family(theme::FONT_LABEL)
-        .font_weight(FontWeight::BOLD)
-        .text_size(px(14.))
-        .text_color(theme::text_muted())
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(11.5))
+        .text_color(theme::text_dim())
         .child(SharedString::from(text.into().to_uppercase()))
 }
 
 pub fn body(text: impl Into<SharedString>) -> gpui::Div {
     div()
-        .text_size(px(15.))
-        .line_height(px(21.))
+        .text_size(px(13.))
+        .line_height(px(19.))
         .text_color(theme::text_muted())
         .child(text.into())
 }
 
-/// A quiet content surface. Most of the screen should be these.
-pub fn panel() -> gpui::Div {
-    div().bg(theme::panel()).border_1().border_color(theme::line())
+/// Row/control title text.
+pub fn title(text: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .text_size(px(14.))
+        .line_height(px(20.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme::text())
+        .child(text.into())
 }
 
-/// The loud, cel-shaded surface (ink outline + hard shadow). One per page at
-/// most, for the thing the page is about.
-pub fn hero_panel() -> gpui::Div {
+/// A grouped surface (Settings-style card). Most content lives in these.
+pub fn panel() -> gpui::Div {
     div()
         .bg(theme::panel())
-        .border_2()
-        .border_color(theme::ink())
-        .shadow(theme::comic_shadow(6.))
+        .border_1()
+        .border_color(theme::line())
+        .rounded(px(theme::RADIUS_LG))
+        .overflow_hidden()
 }
 
-/// Panel with a colored accent strip on the left edge. Add content with
+/// Panel with a thin colored strip on the left edge. Add content with
 /// `card_body()` so long text wraps instead of overflowing.
 pub fn card(accent: Rgba) -> gpui::Div {
-    panel().flex().child(div().w(px(5.)).flex_none().bg(accent))
+    panel().flex().child(div().w(px(3.)).flex_none().bg(accent))
 }
 
 pub fn card_body() -> gpui::Div {
     div().flex_1().min_w_0()
 }
 
+/// 1px divider between rows in a panel.
+pub fn divider() -> gpui::Div {
+    div().h(px(1.)).flex_none().bg(theme::line())
+}
+
+/// A small colored tag.
 pub fn badge(text: impl Into<SharedString>, color: Rgba) -> gpui::Div {
     div()
         .flex_none()
+        .flex()
+        .items_center()
+        .h(px(20.))
         .px(px(7.))
-        .py(px(1.))
-        .border_1()
-        .border_color(theme::with_alpha(color, 0.8))
-        .bg(theme::with_alpha(color, 0.14))
+        .rounded(px(theme::RADIUS))
+        .bg(theme::with_alpha(color, 0.15))
         .text_color(color)
-        .font_family(theme::FONT_LABEL)
-        .font_weight(FontWeight::BOLD)
-        .text_size(px(12.))
-        .child(SharedString::from(text.into().to_uppercase()))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(11.5))
+        .child(text.into())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -102,45 +110,38 @@ pub fn button(
     icon_glyph: Option<Icon>,
     variant: Variant,
 ) -> Stateful<gpui::Div> {
-    let (bg, fg, hover) = match variant {
-        Variant::Primary => (theme::accent(), theme::accent_ink(), theme::accent_hi()),
-        Variant::Secondary => (theme::panel_hi(), theme::text(), theme::line()),
-        Variant::Ghost => (gpui::transparent_black().into(), theme::text_muted(), theme::panel_hi()),
+    let (bg, fg, hover, border): (gpui::Hsla, Rgba, Rgba, gpui::Hsla) = match variant {
+        Variant::Primary => (theme::accent().into(), theme::accent_ink(), theme::accent_hi(), gpui::transparent_black()),
+        Variant::Secondary => (theme::panel_hi().into(), theme::text(), theme::line(), theme::ink().into()),
+        Variant::Ghost => (gpui::transparent_black(), theme::text(), theme::panel_hi(), gpui::transparent_black()),
     };
-    let primary = variant == Variant::Primary;
+    let pressed = if variant == Variant::Primary { theme::accent_pressed() } else { theme::ink() };
     div()
         .id(id.into())
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(7.))
-        .h(px(34.))
-        .px(px(14.))
+        .justify_center()
+        .gap(px(8.))
+        .h(px(32.))
+        .px(px(12.))
+        .rounded(px(theme::RADIUS))
         .bg(bg)
+        .border_1()
+        .border_color(border)
         .text_color(fg)
-        // Only the primary action gets the comic ink + shadow treatment.
-        .when(primary, |d| d.border_2().border_color(theme::ink()).shadow(theme::comic_shadow(3.)))
-        .when(variant == Variant::Secondary, |d| d.border_1().border_color(theme::line()))
-        .font_family(theme::FONT_LABEL)
-        .font_weight(FontWeight::BOLD)
-        .text_size(px(15.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(13.5))
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
-        .active(|s| s.mt(px(2.)).mb(px(-2.)))
-        .when_some(icon_glyph, |d, i| d.child(icon(i).text_size(px(13.))))
-        .child(SharedString::from(text.into().to_uppercase()))
+        .active(move |s| s.bg(pressed))
+        .when_some(icon_glyph, |d, i| d.child(icon(i).size(px(15.)).text_color(fg)))
+        .child(text.into())
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
-        .when(primary, |d| {
-            d.on_hover(|hovered, _, _| {
-                if *hovered {
-                    sound::play(Sound::Hover)
-                }
-            })
-        })
 }
 
-/// A square icon-only button (window chrome, list actions).
-pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, tooltip_color: Rgba) -> Stateful<gpui::Div> {
+/// A square icon-only button (toolbars, list actions). Give it a tooltip.
+pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, color: Rgba) -> Stateful<gpui::Div> {
     div()
         .id(id.into())
         .flex()
@@ -148,29 +149,56 @@ pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, tooltip_color: Rgba) -
         .items_center()
         .justify_center()
         .size(px(28.))
-        .text_color(tooltip_color)
+        .rounded(px(theme::RADIUS))
         .cursor_pointer()
         .hover(|s| s.bg(theme::panel_hi()))
-        .child(icon(glyph).text_size(px(12.)))
+        .child(icon(glyph).size(px(15.)).text_color(color))
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
 }
 
+/// Attaches a plain-text tooltip.
+pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let text: SharedString = text.into();
+    move |window, cx| gpui_component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+}
+
+/// On/off switch (40×20).
 pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<gpui::Div> {
     div()
         .id(id.into())
         .flex()
         .flex_none()
         .items_center()
-        .w(px(54.))
-        .h(px(26.))
-        .p(px(2.))
+        .w(px(40.))
+        .h(px(20.))
+        .px(px(3.))
+        .rounded_full()
+        .bg(if on { theme::accent() } else { theme::panel_lo() })
         .border_1()
-        .border_color(if on { theme::echo() } else { theme::text_dim() })
-        .bg(if on { theme::with_alpha(theme::echo(), 0.22) } else { theme::panel_lo().into() })
+        .border_color(if on { theme::accent() } else { theme::ink() })
         .when(on, |d| d.justify_end())
         .cursor_pointer()
-        .child(div().size(px(18.)).bg(if on { theme::echo() } else { theme::text_dim() }))
+        .child(div().size(px(12.)).rounded_full().bg(if on { theme::accent_ink() } else { theme::text_muted() }))
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
+}
+
+/// 16px checkbox.
+pub fn checkbox(checked: bool, locked: bool) -> gpui::Div {
+    div()
+        .size(px(18.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme::RADIUS))
+        .border_1()
+        .border_color(if checked { gpui::transparent_black() } else { theme::ink().into() })
+        .bg(match (checked, locked) {
+            (true, true) => theme::success(),
+            (true, false) => theme::accent(),
+            _ => theme::panel_lo(),
+        })
+        .when(checked, |d| d.child(icon(Icon::Check).size(px(13.)).text_color(theme::accent_ink())))
 }
 
 /// Marker type carried by slider drags so each slider only reacts to its own.
@@ -215,38 +243,35 @@ pub fn slider(
         .relative()
         .flex_1()
         .min_w(px(120.))
-        .h(px(26.))
+        .h(px(20.))
         .cursor_pointer()
         .child(
             canvas(move |b, _, _| bounds_for_canvas.set(b), |_, _, _, _| {})
                 .absolute()
                 .size_full(),
         )
-        // track
         .child(
             div()
                 .absolute()
                 .left_0()
                 .right_0()
                 .top(px(8.))
-                .h(px(10.))
-                .bg(theme::bg_deep())
-                .border_2()
-                .border_color(theme::ink())
-                .child(div().h_full().w(relative(fraction)).bg(theme::with_alpha(accent, 0.75))),
+                .h(px(4.))
+                .rounded_full()
+                .bg(theme::ink())
+                .child(div().h_full().rounded_full().w(relative(fraction)).bg(accent)),
         )
-        // knob
         .child(
             div()
                 .absolute()
                 .top(px(2.))
                 .left(relative(fraction))
-                .ml(px(-7.))
-                .w(px(14.))
-                .h(px(22.))
+                .ml(px(-8.))
+                .size(px(16.))
+                .rounded_full()
                 .bg(theme::text())
                 .border_2()
-                .border_color(theme::ink()),
+                .border_color(theme::bg()),
         )
         .on_mouse_down(MouseButton::Left, move |ev, window, cx| {
             let f = to_fraction(ev.position.x, bounds_for_down.get());
@@ -262,7 +287,7 @@ pub fn slider(
         .into_any_element()
 }
 
-/// Segmented option chips; wraps onto multiple rows when needed.
+/// One option of a segmented choice; wraps onto multiple rows when needed.
 pub fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, selected: bool) -> Stateful<gpui::Div> {
     div()
         .id(id.into())
@@ -271,59 +296,65 @@ pub fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, selected: b
         .h(px(28.))
         .flex()
         .items_center()
+        .rounded(px(theme::RADIUS))
         .border_1()
-        .border_color(if selected { theme::text_dim() } else { theme::line() })
-        // Selected options are a raised surface with a yellow underline;
-        // solid yellow is reserved for actions (buttons).
-        .when(selected, |d| d.border_b_2().border_color(theme::accent()))
-        .bg(if selected { theme::panel_hi() } else { theme::panel_lo() })
+        .border_color(if selected { theme::accent() } else { theme::line() })
+        .bg(if selected { theme::selected() } else { theme::panel_lo() })
         .text_color(if selected { theme::text() } else { theme::text_muted() })
-        .font_family(theme::FONT_LABEL)
-        .font_weight(if selected { FontWeight::BOLD } else { FontWeight::SEMIBOLD })
-        .text_size(px(14.5))
+        .font_weight(if selected { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+        .text_size(px(13.))
         .cursor_pointer()
         .when(!selected, |d| d.hover(|s| s.bg(theme::panel_hi()).text_color(theme::text())))
         .child(text.into())
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
 }
 
-/// Diagonal hazard stripes painted across the element's bounds.
-pub fn hazard_stripes(color: Rgba, spacing: f32) -> gpui::Canvas<()> {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                let h = bounds.size.height;
-                let stripe = px(spacing / 2.);
-                let mut x = bounds.left() - h;
-                while x < bounds.right() {
-                    let mut path = PathBuilder::fill();
-                    path.move_to(point(x, bounds.bottom()));
-                    path.line_to(point(x + stripe, bounds.bottom()));
-                    path.line_to(point(x + stripe + h, bounds.top()));
-                    path.line_to(point(x + h, bounds.top()));
-                    path.close();
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, color);
-                    }
-                    x += px(spacing);
-                }
-            });
-        },
-    )
+/// Joined segmented control: `items` are (id, label, selected).
+pub fn segmented(items: Vec<(SharedString, SharedString, bool)>) -> (gpui::Div, Vec<Stateful<gpui::Div>>) {
+    let wrap = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded(px(theme::RADIUS + 2.))
+        .bg(theme::panel_lo())
+        .border_1()
+        .border_color(theme::line());
+    let segments = items
+        .into_iter()
+        .map(|(id, text, selected)| {
+            div()
+                .id(ElementId::Name(id))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .h(px(26.))
+                .px(px(10.))
+                .rounded(px(theme::RADIUS))
+                .text_size(px(13.))
+                .font_weight(if selected { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                .bg(if selected { theme::panel_hi() } else { gpui::transparent_black().into() })
+                .text_color(if selected { theme::text() } else { theme::text_muted() })
+                .cursor_pointer()
+                .when(!selected, |d| d.hover(|s| s.text_color(theme::text())))
+                .child(text)
+                .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
+        })
+        .collect();
+    (wrap, segments)
 }
 
-/// Title row used at the top of each page section: plain, readable, calm.
+/// Heading above a group of rows.
 pub fn section_title(title: impl Into<SharedString>, subtitle: Option<SharedString>) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(3.))
+        .gap(px(2.))
         .child(
             div()
-                .font_family(theme::FONT_LABEL)
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(23.))
+                .text_size(px(15.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
                 .child(title.into()),
         )
@@ -335,15 +366,44 @@ pub fn kv_row(key: impl Into<SharedString>, value: impl Into<SharedString>) -> g
         .flex()
         .gap(px(12.))
         .items_start()
-        .py(px(4.))
-        .child(label(key).w(px(130.)).flex_none().pt(px(2.)))
+        .py(px(3.))
+        .child(
+            div()
+                .w(px(120.))
+                .flex_none()
+                .text_size(px(12.5))
+                .text_color(theme::text_dim())
+                .child(key.into()),
+        )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .font_family(theme::FONT_MONO)
-                .text_size(px(13.5))
+                .text_size(px(12.5))
                 .text_color(theme::text())
                 .child(value.into()),
         )
+}
+
+/// A settings row: title + description on the left, control on the right.
+pub fn setting_row(title_text: impl Into<SharedString>, description: impl Into<SharedString>, control: AnyElement) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(16.))
+        .min_h(px(56.))
+        .px(px(16.))
+        .py(px(10.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(title(title_text))
+                .child(body(description).text_color(theme::text_dim())),
+        )
+        .child(div().flex_none().child(control))
 }

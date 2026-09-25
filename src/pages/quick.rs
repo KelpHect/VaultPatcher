@@ -1,156 +1,86 @@
-//! Simple mode's settings page: a short, friendly list that saves instantly.
+//! Simple mode's settings page: the settings that matter most, in the shared
+//! list + detail layout, saved as soon as they change.
 
-use gpui::{
-    AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window,
-    div, prelude::*, px,
-};
+use gpui::{AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 
-use super::page_header;
-use super::tweaks::control;
-use crate::theme::{self, Icon};
+use super::tweaks::{Group, search_filter, view};
+use crate::theme;
 use crate::ui;
 use crate::workspace::Workspace;
 
-pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> AnyElement {
+pub fn render(ws: &Entity<Workspace>, window: &mut Window, cx: &mut App) -> AnyElement {
     let state = ws.read(cx);
     let game = state.game();
     let def = game.def;
+    let query = state.search.trim().to_lowercase();
 
-    let mut page = div().flex().flex_col().gap(px(26.)).child(page_header(
-        "Quick Settings",
-        "The settings that matter most, saved as soon as you change them. Want every knob? Switch to Advanced in the title bar.",
-        vec![],
-    ));
-    if !game.config_found() {
-        page = page.child(
-            ui::card(theme::danger()).child(ui::card_body().p(px(16.)).child(ui::body(format!(
-                "{} hasn't created its settings files yet. Launch it once, then come back.",
-                def.name
-            )))),
-        );
-    }
-
+    let mut groups = Vec::new();
     for section in def.quick {
-        let mut block = div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(ui::section_title(section.title, Some(section.blurb.into())));
-
-        if !section.quality_presets.is_empty() {
-            let mut row = div().flex().flex_wrap().gap(px(12.));
+        let tweaks: Vec<_> = section
+            .tweaks
+            .iter()
+            .filter_map(|id| def.tweak(id))
+            .filter(|t| search_filter(t, section.title, &query))
+            .collect();
+        if tweaks.is_empty() {
+            continue;
+        }
+        // One-click quality levels above the graphics settings.
+        let extra = (!section.quality_presets.is_empty() && query.is_empty()).then(|| {
+            let mut row = div().flex().gap(px(8.));
             for id in section.quality_presets {
                 let Some(preset) = def.presets.iter().find(|p| p.id == *id) else { continue };
-                let ws = ws.clone();
-                let color = preset.rarity.color();
                 let current = !preset.values.is_empty()
                     && preset.values.iter().all(|(id, v)| def.tweak(id).is_none_or(|t| game.effective(t) == v.to_value()));
+                let ws = ws.clone();
                 row = row.child(
-                    ui::panel()
+                    div()
                         .id(SharedString::from(format!("q-preset-{id}")))
-                        .w(px(220.))
-                        .flex_grow()
+                        .flex_1()
+                        .flex_basis(px(0.))
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .px(px(12.))
+                        .py(px(10.))
+                        .rounded(px(theme::RADIUS_LG))
+                        .border_1()
+                        .border_color(if current { theme::accent() } else { theme::line() })
+                        .bg(if current { theme::selected() } else { theme::panel() })
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::panel_hi()))
-                        .child(div().h(px(5.)).bg(color))
+                        .tooltip(ui::tip(preset.description))
                         .child(
                             div()
-                                .p(px(14.))
                                 .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(div().font_family(theme::FONT_DISPLAY).text_size(px(24.)).text_color(color).child(preset.name))
-                                        .when(current, |d| d.child(ui::badge("Current", theme::success()))),
-                                )
-                                .child(div().text_size(px(13.)).text_color(theme::text_muted()).child(preset.description)),
+                                .items_center()
+                                .gap(px(6.))
+                                .child(div().size(px(8.)).rounded_full().bg(preset.rarity.color()))
+                                .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
+                                .when(current, |d| d.child(ui::badge("Current", theme::success()))),
                         )
+                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(preset.description))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, _| crate::sound::play(crate::sound::Sound::Click))
                         .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.preset_now(preset, cx))),
                 );
             }
-            block = block.child(row);
-        }
-
-        let mut list = ui::panel().flex().flex_col();
-        let mut first = true;
-        for id in section.tweaks {
-            let Some(tweak) = def.tweak(id) else { continue };
-            if !first {
-                list = list.child(div().h(px(1.)).bg(theme::line()));
-            }
-            first = false;
-            let value = game.effective(tweak);
-            if let Some(cards) = super::compare::choice_cards(tweak, ws, cx) {
-                list = list.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .px(px(18.))
-                        .py(px(16.))
-                        .child(
-                            div()
-                                .font_family(theme::FONT_LABEL)
-                                .font_weight(FontWeight::BOLD)
-                                .text_size(px(16.))
-                                .text_color(theme::text())
-                                .child(tweak.label),
-                        )
-                        .child(ui::body(tweak.description))
-                        .child(cards),
-                );
-                continue;
-            }
-            list = list.child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(18.))
-                    .px(px(18.))
-                    .py(px(14.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(240.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .font_family(theme::FONT_LABEL)
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_size(px(16.))
-                                            .text_color(theme::text())
-                                            .child(tweak.label),
-                                    )
-                                    .when(game.pending.contains_key(tweak.id), |d| {
-                                        d.child(ui::icon(Icon::Save).text_size(px(12.)).text_color(theme::accent()))
-                                    }),
-                            )
-                            .child(ui::body(tweak.description))
-                            .children(super::compare::strip(tweak, ws, cx)),
-                    )
-                    .child(
-                        div()
-                            .w(px(400.))
-                            .flex_none()
-                            .flex()
-                            .justify_end()
-                            .child(control(tweak, &value, ws, true)),
-                    ),
-            );
-        }
-        page = page.child(block.child(list));
+            row.into_any_element()
+        });
+        groups.push(Group { title: section.title.into(), blurb: section.blurb.into(), tweaks, extra });
     }
-    page.into_any_element()
+
+    let notice = (!game.config_found()).then(|| format!("{} hasn't created its settings files yet. Launch it once, then come back.", def.name));
+    view(
+        ws,
+        "Quick Settings",
+        "Saved as soon as you change them. Want every setting? Switch to Advanced in the title bar.",
+        groups,
+        true,
+        None,
+        None,
+        notice,
+        window,
+        cx,
+    )
 }

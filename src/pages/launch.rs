@@ -2,7 +2,7 @@
 //! section of the Overview page.
 
 use gpui::{
-    AnyElement, App, ClipboardItem, Entity, FontWeight, IntoElement, ParentElement, SharedString,
+    AnyElement, App, ClipboardItem, Entity, IntoElement, ParentElement, SharedString,
     Styled, div, prelude::*, px,
 };
 
@@ -25,7 +25,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
     let mut list = ui::panel().flex().flex_col();
     for (i, arg) in def.launch_args.iter().enumerate() {
         if i > 0 {
-            list = list.child(div().h(px(1.)).bg(theme::line()));
+            list = list.child(ui::divider());
         }
         let on = args.iter().any(|a| a == arg.arg);
         let ws = ws.clone();
@@ -36,7 +36,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                 .items_center()
                 .gap(px(16.))
                 .px(px(16.))
-                .py(px(12.))
+                .py(px(9.))
                 .child(
                     div()
                         .flex_1()
@@ -48,14 +48,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
-                                .child(
-                                    div()
-                                        .font_family(theme::FONT_LABEL)
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_size(px(15.))
-                                        .text_color(theme::text())
-                                        .child(arg.label),
-                                )
+                                .child(ui::title(arg.label))
                                 .child(
                                     div()
                                         .font_family(theme::FONT_MONO)
@@ -64,7 +57,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                                         .child(arg.arg),
                                 ),
                         )
-                        .child(ui::body(arg.description)),
+                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(arg.description)),
                 )
                 .child(
                     ui::toggle(SharedString::from(format!("arg-{i}")), on)
@@ -76,7 +69,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
     let copy_text = command_line.clone();
     page = page.child(list).child(
         ui::panel()
-            .p(px(18.))
+            .p(px(16.))
             .flex()
             .items_center()
             .gap(px(14.))
@@ -104,7 +97,7 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                     )),
             )
             .child(
-                ui::button("launch-copy", "Copy", Some(Icon::Save), Variant::Secondary)
+                ui::button("launch-copy", "Copy", Some(Icon::Copy), Variant::Secondary)
                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))),
             ),
     );

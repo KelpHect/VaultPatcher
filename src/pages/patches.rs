@@ -1,7 +1,7 @@
 //! Executable patches plus config-file locking.
 
 use gpui::{
-    AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window,
+    AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window,
     div, prelude::*, px,
 };
 
@@ -43,8 +43,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             ));
         }
         Some(exe) => {
-            let mut list = div().flex().flex_col().gap(px(14.));
-            for patch in def.patches {
+            let mut list = ui::panel().flex().flex_col();
+            for (pi, patch) in def.patches.iter().enumerate() {
                 let st = exe.patch_states.get(patch.id).copied().unwrap_or(PatchState::Unsupported);
                 let (status, color) = match st {
                     PatchState::Patched => ("Active", theme::success()),
@@ -91,14 +91,15 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     }
                     _ => None,
                 };
-                list = list.child(
-                    ui::card(patch.rarity.color()).child(
-                        ui::card_body()
-                            
-                            .p(px(16.))
+                list = list.when(pi > 0, |d| d.child(ui::divider())).child(
+                    div().child(
+                        div()
+                            .px(px(16.))
+                            .py(px(12.))
                             .flex()
                             .items_center()
-                            .gap(px(18.))
+                            .gap(px(16.))
+                            .child(div().w(px(3.)).h(px(36.)).flex_none().rounded_full().bg(patch.rarity.color()))
                             .child(
                                 div()
                                     .flex_1()
@@ -110,14 +111,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                             .flex()
                                             .items_center()
                                             .gap(px(10.))
-                                            .child(
-                                                div()
-                                                    .font_family(theme::FONT_LABEL)
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_size(px(16.))
-                                                    .text_color(theme::text())
-                                                    .child(patch.name),
-                                            )
+                                            .child(ui::title(patch.name))
                                             .child(ui::badge(status, color)),
                                     )
                                     .child(ui::body(patch.description))
@@ -130,7 +124,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 );
             }
             if def.patches.is_empty() {
-                list = list.child(ui::body("No executable patches are needed for this game."));
+                list = list.child(div().p(px(16.)).child(ui::body("No executable patches are needed for this game.")));
             }
             page = page.child(list);
         }
@@ -150,7 +144,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             ))
             .child(
                 ui::panel().p(px(16.)).flex().items_center().gap(px(14.))
-                    .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).text_size(px(22.)).text_color(if locked { theme::accent() } else { theme::text_dim() }))
+                    .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).size(px(20.)).text_color(if locked { theme::accent() } else { theme::text_dim() }))
                     .child(div().flex_1().child(ui::body(if locked { "Config files are locked (read-only)." } else { "Config files are writable." })))
                     .child(
                         ui::toggle("lock-configs", locked)

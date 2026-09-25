@@ -1,8 +1,11 @@
+<img src="assets/brand/logo.svg" width="96" alt="Vault Patcher logo: an Eridian Vault arch holding an Eridium crystal">
+
 # Vault Patcher
 
 A desktop patcher, tweaker and mod installer for the Borderlands series, in the spirit of
 MarkerPatch (Dead Space 2) and Fallout 76 Quick Configuration. Built in Rust with
-[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
+[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
+[gpui-component](https://github.com/longbridge/gpui-component).
 
 **Borderlands 2** is fully supported. **The Pre-Sequel** and **Borderlands GOTY Enhanced**
 are in preview (detection, tweaks, presets, SDK install).
@@ -48,8 +51,10 @@ images are captured by the maintainers and published as a release asset
 4. The screenshot is stored as a JPEG in `%APPDATA%\VaultPatcher\comparisons`.
 5. Settings are restored afterwards.
 
-In Quick Settings the options *are* the pictures: click one to use it. Any setting with
-images opens a side-by-side viewer with a draggable divider (← → switch sides, Esc closes).
+Settings pages are a searchable list with a detail pane. For settings with images, the
+pane shows your current option and any other side by side with a draggable divider; click
+a thumbnail to compare against it, or open the full-window viewer (← → switch sides, Esc
+closes).
 
 ## Features
 
@@ -57,22 +62,33 @@ images opens a side-by-side viewer with a draggable divider (← → switch side
   outlines/cel shading, post-processing, shadows, PhysX, FOV, console, HUD, gameplay, audio,
   startup and network. Each one shows its ini location, default, performance cost, and
   whether the in-game menu also manages it.
-- **Staged edits**: nothing is written until you press *Apply*. Applying edits only the
+- **Search** across every setting (Ctrl+F), with filters for changed and waiting values.
+- **Staged edits**: nothing is written until you press *Apply* (Ctrl+S). *Review* lists
+  every change as old → new first, and every save offers *Undo*. Applying edits only the
   lines involved, keeps comments, duplicate keys and formatting intact, and keeps the
   launcher's private `LauncherConfig\WillowEngine.ini` in sync.
+- **Profiles**: save your current settings under a name, load them later, and export or
+  import them as files to share.
+- **Health check** on the Overview page (game and settings found, read-only files, 4 GB
+  patch, SDK up to date, DXVK support), each with a link to the fix.
 - **Presets** (Community Essentials, Clean Look, Pandora Ultra, Balanced, Competitive FPS,
   Potato Mode, Factory Settings).
 - **Exe patches**: Large Address Aware plus the four classic BL2/TPS console hex edits.
   Each patch is matched by byte signature, so it's only offered when it matches exactly once.
-- **Mod manager**: one-click install of the latest Willow2 Python SDK from GitHub, SDK mod
-  and text mod install/enable/disable/remove, and core SDK modules locked.
+- **Mod manager**: one-click install and update of the latest Willow2 Python SDK from
+  GitHub, SDK mod and text mod install/enable/disable/remove (drop files onto the window,
+  or right-click a mod), and core SDK modules locked.
 - **Backups**: every apply, patch and SDK install is snapshotted first and can be restored
   in one click.
 - **Launch options** on the Overview page (`-NoLauncher`, `-NoStartupMovies` and more),
   used by the sidebar's Play button.
-- **Look and feel**: three themes (Vault Hunter, Pandora, Hyperion), Bangers and Barlow
-  fonts, and optional button sounds played from the game's own launcher audio files
-  (nothing is bundled). The status bar has music and mute toggles.
+- **Look and feel**: a dense desktop layout (Fluent metrics, Segoe UI, Lucide icons) with
+  Borderlands yellow as the accent. The game's own art is read from your PC: the Steam
+  library banner and logo head the Setup and Overview pages, and each game's exe icon
+  appears in the game switcher. Three palettes (Graphite, Pandora, Hyperion) and optional
+  button sounds from the game's launcher audio files (nothing is bundled).
+- **Updates and support**: checks for a newer Vault Patcher and mod SDK at startup, and
+  *Copy diagnostics* puts a bug-report summary on the clipboard.
 - **Detection** of Steam libraries, Epic Games installs, and `Documents\My Games` config
   folders, with manual overrides.
 
@@ -85,23 +101,31 @@ cargo test           # unit tests
 cargo test -- --ignored --nocapture   # read-only checks against a local BL2 install
 ```
 
-Requires Windows 10/11. It uses the Segoe MDL2 Assets and Bahnschrift system fonts; Bangers
-is bundled under the OFL.
+`cargo build --release` produces one self-contained `VaultPatcher.exe`: fonts, icons and
+the logo are embedded, the C runtime is linked statically (`.cargo/config.toml`), and the app
+icon is rendered from `assets/brand/logo.svg` at build time. Everything else (mods, DXVK,
+comparison images) is downloaded to the user's PC on demand.
+
+Requires Windows 10/11. Barlow Condensed is bundled under the OFL and the Lucide icons under
+ISC (`assets/icons/LICENSE-lucide.txt`); body text uses the system Segoe UI.
 
 ## Architecture
 
 ```
 src/
-  core/        game-agnostic: ini engine, Steam/Epic detection, backups, PE/hex patching
+  core/        game-agnostic: ini engine, Steam/Epic detection, backups, PE/hex patching,
+               game art (Steam library cache, exe icons)
   tweaks/      tweak model (Control + Binding), ConfigSet, table builders
   games/       one module per game; willow.rs holds the shared BL2/TPS catalog
   pages/       one module per page kind; each renders from the shared Workspace
   mods.rs      SDK + mod install logic
   patches.rs   exe patch definitions
   workspace.rs shared app state and every mutation
-  app.rs       window shell: title bar, sidebar, page host, staged-changes bar, toasts
-  theme.rs     palette, rarity colors, icon glyphs
-  ui.rs        widgets: buttons, toggles, sliders, chips, cards
+  health.rs    Overview health checks and the diagnostics report
+  profiles.rs  named settings profiles (JSON)
+  app.rs       window shell: title bar, nav rail, page host, Apply bar, toasts, dialogs
+  theme.rs     palettes (mirrored into gpui-component), rarity colors, icons
+  ui.rs        widgets: buttons, switches, sliders, chips, setting rows
 ```
 
 ### Adding a tweak
@@ -123,3 +147,11 @@ Tweak keys and option values were checked against a live install and the game's
 localization files. Background research came from PCGamingWiki, the Nvidia BL2/TPS tweak
 guide, OpenBLCMM (`IniTweaksPanel`, `HexDictionary`), the BLCMods Hex-Edits wiki, and the
 bl-sdk projects. Not affiliated with Gearbox Software or 2K.
+
+## License
+
+Vault Patcher is free software under the [GNU General Public License v3.0 or later](LICENSE).
+Bundled assets keep their own licenses: Barlow Condensed (SIL OFL,
+`assets/fonts/Barlow-OFL.txt`) and Lucide icons (ISC, `assets/icons/LICENSE-lucide.txt`).
+Borderlands is a trademark of Gearbox Software; this project isn't affiliated with Gearbox
+or 2K.

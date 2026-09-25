@@ -1,6 +1,7 @@
 //! Game-agnostic plumbing: ini editing, detection, backups, binary patching,
 //! downloads and install records.
 
+pub mod art;
 pub mod backup;
 pub mod binpatch;
 pub mod detect;

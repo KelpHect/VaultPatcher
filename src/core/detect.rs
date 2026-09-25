@@ -73,7 +73,7 @@ pub fn validate_manual(path: &Path, exe: &str) -> Option<PathBuf> {
     }
 }
 
-fn steam_root() -> Option<PathBuf> {
+pub fn steam_root() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use winreg::RegKey;

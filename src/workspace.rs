@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub show_file_details: bool,
     /// Loop the launcher's menu music.
     pub music: bool,
+    /// The first-run welcome has been dismissed.
+    pub welcomed: bool,
 }
 
 impl AppSettings {
@@ -102,11 +104,34 @@ pub enum ToastKind {
     Error,
 }
 
+/// A button on a toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastAction {
+    /// Put back the values the last save replaced.
+    Undo,
+}
+
 #[derive(Clone, Debug)]
 pub struct Toast {
     pub id: u64,
     pub kind: ToastKind,
     pub message: String,
+    pub action: Option<ToastAction>,
+}
+
+/// What the last settings write replaced, for "Undo".
+pub struct Undo {
+    game: usize,
+    values: Vec<(&'static str, Value)>,
+}
+
+/// Newer versions found online (checked once at startup).
+#[derive(Default)]
+pub struct Updates {
+    /// (tag, release page) of a newer Vault Patcher.
+    pub app: Option<(String, String)>,
+    /// Latest mod SDK release tag.
+    pub sdk: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -118,6 +143,8 @@ pub struct ExeInfo {
 pub struct GameState {
     pub def: &'static GameDef,
     pub install: Option<Install>,
+    /// Logo, banner and icon found on this PC (Steam cache / exe).
+    pub art: crate::core::art::Art,
     pub config_dir: Option<PathBuf>,
     pub config: ConfigSet,
     pub pending: BTreeMap<&'static str, Value>,
@@ -129,6 +156,10 @@ pub struct GameState {
     pub setup_selected: BTreeSet<&'static str>,
     /// Setup statuses touch the disk; cached until the next refresh/write.
     status_cache: std::cell::RefCell<HashMap<&'static str, Status>>,
+    /// Last "is the game running" answer and when it was taken.
+    running_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
+    /// Saved profiles, re-read when they change.
+    pub profiles: Vec<crate::profiles::Entry>,
 }
 
 impl GameState {
@@ -136,6 +167,7 @@ impl GameState {
         Self {
             def,
             install: None,
+            art: Default::default(),
             config_dir: None,
             config: ConfigSet::default(),
             pending: BTreeMap::new(),
@@ -145,6 +177,8 @@ impl GameState {
             backups: Vec::new(),
             setup_selected: def.setup.iter().filter(|c| c.recommended).map(|c| c.id).collect(),
             status_cache: Default::default(),
+            running_cache: Default::default(),
+            profiles: crate::profiles::list(def.id),
         }
     }
 
@@ -155,7 +189,20 @@ impl GameState {
     /// True while the game's exe is running (it rewrites its ini files on
     /// exit, and its exe/DLLs are locked).
     pub fn is_running(&self) -> bool {
-        self.exe_path().is_some_and(|p| crate::compare::game_running(&p))
+        // Rendering asks often; the process list only needs checking every
+        // couple of seconds.
+        if let Some((at, running)) = self.running_cache.get()
+            && at.elapsed() < Duration::from_secs(2)
+        {
+            return running;
+        }
+        let running = self.exe_path().is_some_and(|p| crate::compare::game_running(&p));
+        self.running_cache.set(Some((std::time::Instant::now(), running)));
+        running
+    }
+
+    fn reload_profiles(&mut self) {
+        self.profiles = crate::profiles::list(self.def.id);
     }
 
     pub fn config_found(&self) -> bool {
@@ -199,6 +246,19 @@ pub struct Workspace {
     pub capture: Option<std::sync::Arc<std::sync::Mutex<crate::compare::CaptureProgress>>>,
     pub capture_save: Option<String>,
     pub capture_settle: u32,
+    /// Settings search text (from the toolbar search box).
+    pub search: String,
+    /// The setting shown in the detail pane.
+    pub selected_tweak: Option<&'static str>,
+    /// The detail pane's comparison: (tweak, image on the right, divider 0..=1).
+    pub inline_compare: Option<(&'static str, usize, f32)>,
+    /// Advanced: the "review changes" dialog is open.
+    pub review_open: bool,
+    pub updates: Updates,
+    /// Shared text inputs, created by the window (they need one).
+    pub search_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    pub profile_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    undo: Option<Undo>,
     next_toast: u64,
     /// Per game: bumped on every Simple-mode edit; a pending auto-apply only
     /// runs if no newer edit for that game arrived in the meantime.
@@ -232,6 +292,14 @@ impl Workspace {
             capture: None,
             capture_save: None,
             capture_settle: 25,
+            search: String::new(),
+            selected_tweak: None,
+            inline_compare: None,
+            review_open: false,
+            updates: Updates::default(),
+            search_input: None,
+            profile_input: None,
+            undo: None,
             next_toast: 0,
             autoapply_generation: vec![0; games::all().len()],
         };
@@ -239,6 +307,7 @@ impl Workspace {
             ws.refresh_game(i);
         }
         ws.fetch_comparison_packs(cx);
+        ws.check_updates(cx);
         let probe = cx.background_executor().spawn(async { crate::core::gpu::dxvk_ready().is_ok() });
         cx.spawn(async move |this, cx| {
             let ready = probe.await;
@@ -275,11 +344,12 @@ impl Workspace {
             .filter(|g| !g.def.comparisons.is_empty() && !crate::compare::has_local_images(g.def.id))
             .map(|g| g.def.id)
             .collect();
-        if missing.is_empty() {
-            return;
-        }
+        let all: Vec<&'static str> = self.games.iter().filter(|g| !g.def.comparisons.is_empty()).map(|g| g.def.id).collect();
         let task = cx.background_executor().spawn(async move {
-            missing.iter().filter(|id| crate::compare::download_pack(id).is_ok()).count()
+            let downloaded = missing.iter().filter(|id| crate::compare::download_pack(id).is_ok()).count();
+            // Small copies for the settings pages (only missing ones are made).
+            let previews: usize = all.iter().map(|id| crate::compare::make_previews(id)).sum();
+            downloaded + previews
         });
         cx.spawn(async move |this, cx| {
             if task.await > 0 {
@@ -313,6 +383,21 @@ impl Workspace {
     }
 
     pub fn navigate(&mut self, page: PageKind, cx: &mut Context<Self>) {
+        // Pages that only exist in the other mode (e.g. One-Click Setup from
+        // Advanced) switch modes, unless that would strand waiting changes.
+        let def = self.game().def;
+        let other = match self.settings.mode {
+            Mode::Simple => Mode::Advanced,
+            Mode::Advanced => Mode::Simple,
+        };
+        if page != PageKind::Capture && !def.nav_items(self.settings.mode).any(|n| n.kind == page) && def.nav_items(other).any(|n| n.kind == page) {
+            if !self.game().pending.is_empty() {
+                self.toast(ToastKind::Info, "Apply or discard the waiting changes first", cx);
+                return;
+            }
+            self.settings.mode = other;
+            self.settings.save();
+        }
         if self.page != page {
             crate::sound::play(crate::sound::Sound::Whoosh);
         }
@@ -348,6 +433,7 @@ impl Workspace {
 
     pub fn set_palette(&mut self, palette: crate::theme::Palette, cx: &mut Context<Self>) {
         crate::theme::set_palette(palette);
+        crate::theme::apply(cx);
         self.settings.palette = palette;
         self.settings.save();
         cx.notify();
@@ -382,6 +468,7 @@ impl Workspace {
                 store: Store::Manual,
             })
             .or_else(|| detect::detect(&def.detect_spec()));
+        game.art = crate::core::art::find(def.id, def.steam_app_ids, game.exe_path().as_deref());
 
         game.config_dir = settings
             .manual_config_dirs
@@ -513,7 +600,8 @@ impl Workspace {
     pub fn apply_pending(&mut self, cx: &mut Context<Self>) {
         match self.try_apply_pending(self.active, false) {
             Ok(n) => {
-                self.toast(ToastKind::Success, format!("Applied {n} change(s). Backup saved."), cx);
+                self.review_open = false;
+                self.toast_with(ToastKind::Success, format!("Applied {n} change(s)"), Some(ToastAction::Undo), cx);
             }
             Err(e) => self.toast(ToastKind::Error, format!("Apply failed: {e:#}"), cx),
         }
@@ -522,6 +610,12 @@ impl Workspace {
     fn try_apply_pending(&mut self, gi: usize, coalesce: bool) -> Result<usize> {
         let pending = std::mem::take(&mut self.games[gi].pending);
         let def = self.games[gi].def;
+        // What's on disk now, so the save can be undone.
+        let previous: Vec<(&'static str, Value)> = pending
+            .keys()
+            .filter_map(|id| def.tweak(id))
+            .map(|t| (t.id, self.games[gi].current(t).unwrap_or_else(|| t.default.to_value())))
+            .collect();
         let label = if coalesce {
             QUICK_LABEL.to_string()
         } else {
@@ -535,11 +629,191 @@ impl Workspace {
             }
         });
         match result {
-            Ok(()) => Ok(pending.len()),
+            Ok(()) => {
+                // A burst of Quick Settings saves undoes back to before the burst.
+                match &mut self.undo {
+                    Some(undo) if coalesce && undo.game == gi => {
+                        for (id, v) in previous {
+                            if !undo.values.iter().any(|(i, _)| *i == id) {
+                                undo.values.push((id, v));
+                            }
+                        }
+                    }
+                    _ => self.undo = Some(Undo { game: gi, values: previous }),
+                }
+                Ok(pending.len())
+            }
             Err(e) => {
                 self.games[gi].pending = pending;
                 Err(e)
             }
+        }
+    }
+
+    /// Writes back the values the last save replaced.
+    pub fn undo_last(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.undo.take() else {
+            return;
+        };
+        let def = self.games[undo.game].def;
+        let result = self.write_configs(undo.game, "Before undo", false, |config| {
+            for (id, value) in &undo.values {
+                if let Some(tweak) = def.tweak(id) {
+                    tweak.write(config, value);
+                }
+            }
+        });
+        match result {
+            Ok(()) => self.toast(ToastKind::Info, format!("Undone: {} setting(s) put back", undo.values.len()), cx),
+            Err(e) => self.toast(ToastKind::Error, format!("Couldn't undo: {e:#}"), cx),
+        }
+    }
+
+    /// Drops one waiting change (from the review dialog).
+    pub fn unstage(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.game_mut().pending.remove(id);
+        if self.game().pending.is_empty() {
+            self.review_open = false;
+        }
+        cx.notify();
+    }
+
+    pub fn set_review(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.review_open = open && !self.game().pending.is_empty();
+        cx.notify();
+    }
+
+    pub fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.search != text {
+            self.search = text;
+            cx.notify();
+        }
+    }
+
+    /// Updates the detail pane's comparison for `tweak`.
+    pub fn set_inline(&mut self, tweak: &'static str, right: Option<usize>, split: Option<f32>, cx: &mut Context<Self>) {
+        let (_, r, s) = self.inline_compare.filter(|c| c.0 == tweak).unwrap_or((tweak, usize::MAX, 0.5));
+        self.inline_compare = Some((tweak, right.unwrap_or(r), split.unwrap_or(s).clamp(0., 1.)));
+        cx.notify();
+    }
+
+    pub fn select_tweak(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        if self.selected_tweak != Some(id) {
+            self.selected_tweak = Some(id);
+            cx.notify();
+        }
+    }
+
+    // ---- profiles ------------------------------------------------------------
+
+    /// Saves every setting's current value (including waiting changes) as a
+    /// named profile.
+    pub fn save_profile(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            self.toast(ToastKind::Error, "Give the profile a name first", cx);
+            return false;
+        }
+        let game = self.game();
+        let profile = crate::profiles::snapshot(game.def, name, |t| game.effective(t));
+        let path = crate::profiles::path_for(game.def.id, name);
+        match crate::profiles::write(&profile, &path) {
+            Ok(()) => {
+                self.game_mut().reload_profiles();
+                self.toast(ToastKind::Success, format!("Saved profile \u{201c}{name}\u{201d}"), cx);
+                true
+            }
+            Err(e) => {
+                self.toast(ToastKind::Error, format!("Couldn't save the profile: {e:#}"), cx);
+                false
+            }
+        }
+    }
+
+    /// Loads a profile: staged in Advanced mode, saved at once in Simple.
+    pub fn load_profile(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        let def = self.game().def;
+        let loaded = crate::profiles::read(path).and_then(|p| crate::profiles::resolve(def, &p).map(|r| (p.name, r)));
+        let (name, (values, skipped)) = match loaded {
+            Ok(v) => v,
+            Err(e) => {
+                self.toast(ToastKind::Error, format!("{e:#}"), cx);
+                return;
+            }
+        };
+        self.game_mut().pending.clear();
+        for (tweak, value) in values {
+            self.stage(tweak, value, cx);
+        }
+        let changes = self.game().pending.len();
+        let note = if skipped > 0 { format!(" ({skipped} unknown setting(s) skipped)") } else { String::new() };
+        if self.mode() == Mode::Simple {
+            self.schedule_autoapply(cx);
+            self.toast(ToastKind::Info, format!("Loading {name}: {changes} change(s){note}"), cx);
+        } else {
+            self.toast(ToastKind::Info, format!("{name} loaded: {changes} change(s) waiting{note}"), cx);
+        }
+    }
+
+    /// Copies a profile file into this game's profile folder.
+    pub fn import_profile(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        let def = self.game().def;
+        let result = crate::profiles::read(path).and_then(|p| {
+            crate::profiles::resolve(def, &p)?;
+            crate::profiles::write(&p, &crate::profiles::path_for(def.id, &p.name))?;
+            Ok(p.name)
+        });
+        self.game_mut().reload_profiles();
+        match result {
+            Ok(name) => self.toast(ToastKind::Success, format!("Imported {name}"), cx),
+            Err(e) => self.toast(ToastKind::Error, format!("Import failed: {e:#}"), cx),
+        }
+    }
+
+    pub fn export_profile(&mut self, from: &std::path::Path, to: &std::path::Path, cx: &mut Context<Self>) {
+        match std::fs::copy(from, to) {
+            Ok(_) => self.toast(ToastKind::Success, format!("Exported to {}", to.display()), cx),
+            Err(e) => self.toast(ToastKind::Error, format!("Export failed: {e}"), cx),
+        }
+    }
+
+    pub fn delete_profile(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        if let Err(e) = std::fs::remove_file(path) {
+            self.toast(ToastKind::Error, format!("{e}"), cx);
+        }
+        self.game_mut().reload_profiles();
+        cx.notify();
+    }
+
+    // ---- updates -------------------------------------------------------------
+
+    /// One background check per launch: a newer Vault Patcher, and the latest
+    /// mod SDK. Silent without a network.
+    fn check_updates(&mut self, cx: &mut Context<Self>) {
+        let sdk_repo = self.games.iter().find_map(|g| g.def.mods).map(|m| m.sdk_repo);
+        let task = cx.background_executor().spawn(async move {
+            let app = crate::core::net::latest_release(crate::compare::IMAGE_REPO)
+                .ok()
+                .filter(|(tag, _)| crate::core::net::is_newer(tag, env!("CARGO_PKG_VERSION")));
+            let sdk = sdk_repo.and_then(|r| crate::core::net::latest_release(r).ok()).map(|(tag, _)| tag);
+            Updates { app, sdk }
+        });
+        cx.spawn(async move |this, cx| {
+            let updates = task.await;
+            this.update(cx, |ws, cx| {
+                ws.updates = updates;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The newer SDK release, when the installed one is outdated.
+    pub fn sdk_update_available(&self) -> Option<&str> {
+        match (&self.game().sdk, self.updates.sdk.as_deref()) {
+            (SdkStatus::Installed(v), Some(latest)) if v != latest => Some(latest),
+            _ => None,
         }
     }
 
@@ -630,7 +904,7 @@ impl Workspace {
                 }
                 match ws.try_apply_pending(gi, true) {
                     Ok(_) => {
-                        ws.toast(ToastKind::Success, "Saved", cx);
+                        ws.toast_with(ToastKind::Success, "Saved", Some(ToastAction::Undo), cx);
                     }
                     Err(e) => ws.toast(ToastKind::Error, format!("Couldn't save: {e:#}"), cx),
                 }
@@ -647,7 +921,7 @@ impl Workspace {
         self.component_status_for(self.active, component)
     }
 
-    fn component_status_for(&self, gi: usize, component: &setup::Component) -> Status {
+    pub(crate) fn component_status_for(&self, gi: usize, component: &setup::Component) -> Status {
         let game = &self.games[gi];
         if let Some(s) = game.status_cache.borrow().get(component.id) {
             return s.clone();
@@ -1316,7 +1590,7 @@ impl Workspace {
         self.launch_args_for(self.active)
     }
 
-    fn launch_args_for(&self, gi: usize) -> Vec<String> {
+    pub(crate) fn launch_args_for(&self, gi: usize) -> Vec<String> {
         let def = self.games[gi].def;
         self.settings
             .launch_args
@@ -1370,21 +1644,24 @@ impl Workspace {
     }
 
     pub fn toast(&mut self, kind: ToastKind, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.toast_with(kind, message, None, cx);
+    }
+
+    pub fn toast_with(&mut self, kind: ToastKind, message: impl Into<String>, action: Option<ToastAction>, cx: &mut Context<Self>) {
+        let message = message.into();
+        // Repeated saves replace the previous "Saved" toast instead of stacking.
+        self.toasts.retain(|t| !(t.message == message && t.action == action));
         let id = self.next_toast;
         self.next_toast += 1;
         if kind == ToastKind::Success {
             crate::sound::play(crate::sound::Sound::Applied);
         }
-        self.toasts.push(Toast {
-            id,
-            kind,
-            message: message.into(),
-        });
+        self.toasts.push(Toast { id, kind, message, action });
         if self.toasts.len() > 4 {
             self.toasts.remove(0);
         }
         cx.notify();
-        let secs = if kind == ToastKind::Error { 8 } else { 4 };
+        let secs = if kind == ToastKind::Error || action.is_some() { 8 } else { 4 };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(secs)).await;
             this.update(cx, |ws, cx| {
@@ -1394,6 +1671,14 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    pub fn welcome_done(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        self.settings.welcomed = true;
+        self.settings.mode = mode;
+        self.page = self.home_page();
+        self.settings.save();
+        cx.notify();
     }
 
     pub fn dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
