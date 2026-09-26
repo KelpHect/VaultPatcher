@@ -56,6 +56,7 @@ pub fn system_theme() -> SystemTheme {
 }
 
 /// `AccentPalette` is eight RGBA quads, lightest first; the eighth is unused.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_accent_palette(bytes: &[u8]) -> Option<[u32; 7]> {
     if bytes.len() < 28 {
         return None;
