@@ -638,7 +638,8 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .px(px(24.))
-            .bg(theme::panel())
+            // Opaque, so the list it sits under never shows through.
+            .bg(theme::dialog())
             .border_t_1()
             .border_color(theme::card_stroke())
             .child(ui::icon(Icon::Info).text_color(theme::accent()))
@@ -670,6 +671,7 @@ impl Shell {
         // Rises from the bottom edge when changes first appear.
         Some(if theme::motion() {
             div()
+                .flex_none()
                 .relative()
                 .child(bar)
                 .with_animation("pending-bar", Animation::new(theme::NORMAL).with_easing(ui::ease_decelerate()), |d, t| d.top(px(24. * (1. - t))).opacity(t))
@@ -1032,7 +1034,7 @@ impl Render for Shell {
                 .min_h_0()
                 .flex()
                 .flex_col()
-                .child(ui::entrance(page_key, 140., div().size_full().flex().flex_col().child(page)))
+                .child(ui::entrance_fill(page_key, 140., page))
         } else {
             div().flex_1().min_h_0().child(
                 div().id(ElementId::Name(page_key.clone())).size_full().overflow_y_scroll().child(

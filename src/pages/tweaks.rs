@@ -469,6 +469,7 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
             let minus_ws = ws.clone();
             let plus_ws = ws.clone();
             let reset_ws = ws.clone();
+            let select_ws = ws.clone();
             let readout = div()
                 .min_w(px(64.))
                 .h(px(32.))
@@ -495,10 +496,11 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .when(compact, |d| d.w(px(220.)))
+                .when(compact, |d| d.w(px(248.)))
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(ui::slider(
                     spec,
+                    move |_, cx| select_ws.update(cx, |ws, cx| ws.select_tweak(tweak.id, cx)),
                     move |f| to_value(f).display(&tweak.control).into(),
                     move |f, _, cx| slide_ws.update(cx, |ws, cx| commit(ws, tweak, to_value(f), instant, cx)),
                 ))

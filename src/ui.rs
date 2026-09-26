@@ -88,6 +88,21 @@ pub fn entrance(key: impl Into<SharedString>, offset: f32, content: impl IntoEle
         .into_any_element()
 }
 
+/// [`entrance`] for pages that fill the content area and scroll their own
+/// panes: the wrapper takes the full height so their scroll views work.
+pub fn entrance_fill(key: impl Into<SharedString>, offset: f32, content: impl IntoElement) -> AnyElement {
+    let key: SharedString = key.into();
+    let wrapper = div().flex_1().min_h_0().size_full().flex().flex_col().relative().child(content);
+    if !theme::motion() {
+        return wrapper.into_any_element();
+    }
+    wrapper
+        .with_animation(ElementId::Name(key), Animation::new(Duration::from_millis(300)).with_easing(ease_entrance()), move |d, t| {
+            d.top(px(offset * (1. - t))).opacity((t * 2.).min(1.))
+        })
+        .into_any_element()
+}
+
 // ---- type ramp ------------------------------------------------------------------
 
 /// A 16px Segoe Fluent icon; size with `.size(px(..))`, color with `.text_color(..)`.
@@ -343,25 +358,44 @@ impl Render for EmptyView {
     }
 }
 
-thread_local! {
-    /// Where each slider's thumb is while it's being dragged, by slider id.
-    /// The value is only committed when the drag ends.
-    static SLIDER_PREVIEW: RefCell<Vec<(SharedString, f32)>> = const { RefCell::new(Vec::new()) };
+/// Per-slider interaction state that must outlive a frame.
+#[derive(Clone, Copy, Default)]
+struct SliderState {
+    /// Where the thumb is while dragging (committed on release).
+    preview: Option<f32>,
+    /// Pointer offset from the thumb center when the thumb itself was grabbed.
+    grab: f32,
+    /// Esc pressed during this drag: ignore the rest of it.
+    cancelled: bool,
+    /// Show the value tooltip until then (after keyboard steps).
+    tip_until: Option<Instant>,
 }
 
-fn set_preview(id: &SharedString, fraction: Option<f32>) {
-    SLIDER_PREVIEW.with(|p| {
-        let mut p = p.borrow_mut();
-        p.retain(|(i, _)| i != id);
-        if let Some(f) = fraction {
-            p.push((id.clone(), f));
-        }
+thread_local! {
+    static SLIDERS: RefCell<Vec<(SharedString, SliderState)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn slider_state(id: &str) -> SliderState {
+    SLIDERS.with(|s| s.borrow().iter().find(|(i, _)| i == id).map(|(_, st)| *st).unwrap_or_default())
+}
+
+fn update_slider(id: &SharedString, f: impl FnOnce(&mut SliderState)) {
+    SLIDERS.with(|s| {
+        let mut s = s.borrow_mut();
+        let entry = match s.iter().position(|(i, _)| i == id) {
+            Some(i) => i,
+            None => {
+                s.push((id.clone(), SliderState::default()));
+                s.len() - 1
+            }
+        };
+        f(&mut s[entry].1);
     });
 }
 
 /// The fraction a slider is being dragged to, if it's being dragged now.
 pub fn slider_preview(id: &str) -> Option<f32> {
-    SLIDER_PREVIEW.with(|p| p.borrow().iter().find(|(i, _)| i == id).map(|(_, f)| *f))
+    slider_state(id).preview
 }
 
 /// What a slider shows and how it moves.
@@ -372,19 +406,29 @@ pub struct SliderSpec {
     /// Number of steps between the ends, for snapping and the keyboard;
     /// tick marks show when there are few.
     pub steps: Option<u32>,
-    /// Where the game's default sits, drawn as a notch on the rail.
+    /// Where the game's default sits: a dot under the rail, the magnet while
+    /// dragging, and what double-click / Delete reset to.
     pub default: Option<f32>,
     pub accent: Rgba,
 }
 
-/// WinUI Slider: a 4px rail with an 18px thumb (its accent core grows on
-/// hover, shrinks while pressed), tick marks for coarse steps, a notch at the
-/// default, and the value in a tooltip above the thumb while dragging.
-/// Dragging previews live; `on_commit` receives the snapped fraction once,
-/// on release. Arrow keys step, Page Up/Down move ten steps, Home/End jump
-/// to the ends. `format` labels a fraction for the tooltip.
+/// Rail inset: the thumb's radius, so its center reaches both rail ends.
+const THUMB_R: f32 = 9.;
+
+/// WinUI Slider: a 4px rail with an 18px thumb (its accent core is 10px,
+/// 14 on hover, 8.5 while pressed), tick marks for coarse steps, a dot at the
+/// game's default, and the value in a tooltip while dragging.
+///
+/// - Dragging previews live; `on_commit` receives the snapped fraction once,
+///   on release. Grabbing the thumb doesn't move it; Esc cancels a drag.
+///   Near the default the thumb snaps onto it; hold Alt to move freely.
+/// - Keys: arrows step (Shift ×10, Ctrl ¼ step), Page Up/Down ×10, Home/End,
+///   Delete resets to the default. Double-click resets too.
+/// - `on_start` runs when the user starts interacting (to select its row);
+///   `format` labels a fraction for the tooltip.
 pub fn slider(
     spec: SliderSpec,
+    on_start: impl Fn(&mut Window, &mut App) + 'static,
     format: impl Fn(f32) -> SharedString + 'static,
     on_commit: impl Fn(f32, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -397,86 +441,105 @@ pub fn slider(
             None => f,
         }
     };
-    let dragging = slider_preview(&id);
-    let shown = snap(dragging.unwrap_or(fraction));
+    let state = slider_state(&id);
+    let dragging = state.preview.is_some();
+    let shown = snap(state.preview.unwrap_or(fraction));
+    let show_tip = dragging || state.tip_until.is_some_and(|t| Instant::now() < t);
     let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
-    let on_commit = Rc::new(on_commit);
-    let to_fraction = move |x: Pixels, b: Bounds<Pixels>| -> f32 {
-        if b.size.width <= px(0.) {
+    let on_start = Rc::new(on_start);
+    let on_commit: Rc<dyn Fn(f32, &mut Window, &mut App)> = Rc::new(on_commit);
+
+    // Pointer → fraction along the rail (inset by the thumb radius), with
+    // the default acting as a magnet within 4px unless Alt is held.
+    let to_fraction = move |x: Pixels, b: Bounds<Pixels>, free: bool| -> f32 {
+        let width = b.size.width - px(THUMB_R * 2.);
+        if width <= px(0.) {
             return 0.;
         }
-        snap((x - b.left()) / b.size.width)
+        let raw = ((x - b.left() - px(THUMB_R)) / width).clamp(0., 1.);
+        if free {
+            return raw;
+        }
+        if let Some(d) = default
+            && ((raw - d) * f32::from(width)).abs() <= 4.
+        {
+            return d;
+        }
+        snap(raw)
+    };
+
+    let thumb_x = {
+        let b = bounds.clone();
+        move |f: f32| {
+            let b = b.get();
+            b.left() + px(THUMB_R) + (b.size.width - px(THUMB_R * 2.)) * f
+        }
     };
 
     let bounds_for_canvas = bounds.clone();
-    let bounds_for_down = bounds.clone();
+    let bounds_down = bounds.clone();
     let (down_id, move_id, up_id, out_id, key_id) = (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
-    let (commit_up, commit_out, commit_key) = (on_commit.clone(), on_commit.clone(), on_commit);
-    let end_drag = move |id: &SharedString, commit: &Rc<dyn Fn(f32, &mut Window, &mut App)>, window: &mut Window, cx: &mut App| {
-        if let Some(f) = slider_preview(id) {
-            set_preview(id, None);
+    let (commit_down, commit_up, commit_out, commit_key) = (on_commit.clone(), on_commit.clone(), on_commit.clone(), on_commit);
+    let end_drag = |id: &SharedString, commit: &Rc<dyn Fn(f32, &mut Window, &mut App)>, window: &mut Window, cx: &mut App| {
+        let state = slider_state(id);
+        update_slider(id, |s| {
+            s.preview = None;
+            s.cancelled = false;
+        });
+        if let Some(f) = state.preview.filter(|_| !state.cancelled) {
             commit(f, window, cx);
-            window.refresh();
         }
+        window.refresh();
     };
-    let end_up = end_drag.clone();
-    let commit_up: Rc<dyn Fn(f32, &mut Window, &mut App)> = commit_up;
-    let commit_out: Rc<dyn Fn(f32, &mut Window, &mut App)> = commit_out;
 
     // Tick marks under the rail when there are few enough to read.
     let ticks = steps.filter(|n| *n <= 12).map(|n| {
-        let mut row = div().absolute().left(px(9.)).right(px(9.)).top(px(22.)).h(px(4.));
+        let mut row = div().absolute().left(px(THUMB_R)).right(px(THUMB_R)).top(px(21.)).h(px(4.));
         for i in 0..=n {
-            row = row.child(div().absolute().left(relative(i as f32 / n as f32)).ml(px(-0.5)).w(px(1.)).h_full().bg(theme::ink()));
+            row = row.child(
+                div().absolute().left(relative(i as f32 / n as f32)).ml(px(-0.5)).w(px(1.)).h_full().bg(theme::with_alpha(theme::ink(), 0.6)),
+            );
         }
         row
     });
+    let core = if dragging { 8.5 } else { 10. };
 
     div()
         .id(ElementId::Name(id.clone()))
         .group(id.clone())
         .relative()
         .flex_1()
-        .min_w(px(120.))
+        .min_w(px(160.))
         .h(px(32.))
         .cursor_pointer()
         .tab_index(0)
         .focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(1.), Some(theme::focus_stroke_inner().into())))
         .rounded(px(theme::RADIUS))
         .child(canvas(move |b, _, _| bounds_for_canvas.set(b), |_, _, _, _| {}).absolute().size_full())
-        // The rail spans between the thumb's centers at either end.
         .child(
             div()
                 .absolute()
-                .left(px(9.))
-                .right(px(9.))
+                .left(px(THUMB_R))
+                .right(px(THUMB_R))
                 .top(px(14.))
                 .h(px(4.))
                 .rounded(px(2.))
                 .bg(theme::ink())
-                .child(div().h_full().rounded(px(2.)).w(relative(shown)).bg(accent))
-                .when_some(default, |d, f| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .left(relative(f.clamp(0., 1.)))
-                            .ml(px(-1.))
-                            .top(px(-3.))
-                            .w(px(2.))
-                            .h(px(10.))
-                            .rounded(px(1.))
-                            .bg(theme::text_dim()),
-                    )
-                }),
+                .child(div().h_full().rounded(px(2.)).w(relative(shown)).bg(accent)),
         )
         .children(ticks)
+        .when_some(default, |d, f| {
+            d.child(div().absolute().left(px(THUMB_R)).right(px(THUMB_R)).top(px(25.)).h(px(4.)).child(
+                div().absolute().left(relative(f.clamp(0., 1.))).ml(px(-2.)).size(px(4.)).rounded_full().bg(theme::text_muted()),
+            ))
+        })
         .child(
-            div().absolute().left(px(9.)).right(px(9.)).top(px(7.)).h(px(18.)).child(
+            div().absolute().left(px(THUMB_R)).right(px(THUMB_R)).top(px(7.)).h(px(18.)).child(
                 div()
                     .absolute()
                     .left(relative(shown))
-                    .ml(px(-9.))
-                    .size(px(18.))
+                    .ml(px(-THUMB_R))
+                    .size(px(THUMB_R * 2.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -487,18 +550,18 @@ pub fn slider(
                     .shadow(theme::shadow_card())
                     .child(
                         div()
-                            .size(px(if dragging.is_some() { 10. } else { 12. }))
+                            .size(px(core))
                             .rounded_full()
                             .bg(accent)
-                            .when(dragging.is_none(), |d| d.group_hover(id.clone(), |s| s.size(px(14.)))),
+                            .when(!dragging, |d| d.group_hover(id.clone(), |s| s.size(px(14.)))),
                     )
-                    // The value, above the thumb, while dragging.
-                    .when(dragging.is_some(), |d| {
+                    .when(show_tip, |d| {
                         d.child(
                             div().absolute().bottom(px(26.)).left(px(-40.)).w(px(98.)).flex().justify_center().child(
                                 div()
-                                    .px(px(8.))
-                                    .py(px(4.))
+                                    .px(px(9.))
+                                    .pt(px(6.))
+                                    .pb(px(8.))
                                     .rounded(px(theme::RADIUS))
                                     .backdrop_blur(px(theme::ACRYLIC_BLUR))
                                     .bg(theme::acrylic())
@@ -515,40 +578,94 @@ pub fn slider(
                     }),
             ),
         )
-        .on_mouse_down(MouseButton::Left, move |ev, window, _| {
-            let f = to_fraction(ev.position.x, bounds_for_down.get());
-            set_preview(&down_id, Some(f));
+        .on_mouse_down(MouseButton::Left, move |ev, window, cx| {
+            on_start(window, cx);
+            let b = bounds_down.get();
+            // Double-click resets to the game's default.
+            if ev.click_count >= 2
+                && let Some(d) = default
+            {
+                update_slider(&down_id, |s| *s = SliderState::default());
+                commit_down(d, window, cx);
+                window.refresh();
+                return;
+            }
+            let at_thumb = thumb_x(shown);
+            let grabbed = (ev.position.x - at_thumb).abs() <= px(THUMB_R);
+            let f = if grabbed { shown } else { to_fraction(ev.position.x, b, ev.modifiers.alt) };
+            let grab = if grabbed { f32::from(ev.position.x - at_thumb) } else { 0. };
+            update_slider(&down_id, |s| {
+                s.preview = Some(f);
+                s.grab = grab;
+                s.cancelled = false;
+            });
             window.refresh();
         })
         .on_drag(SliderDrag(move_id.clone()), |_, _, _, cx| cx.new(|_| EmptyView))
         .on_drag_move::<SliderDrag>(move |ev, window, cx| {
-            if ev.drag(cx).0 == move_id {
-                let f = to_fraction(ev.event.position.x, ev.bounds);
-                if slider_preview(&move_id) != Some(f) {
-                    set_preview(&move_id, Some(f));
-                    window.refresh();
-                }
+            if ev.drag(cx).0 != move_id {
+                return;
+            }
+            let state = slider_state(&move_id);
+            if state.cancelled {
+                return;
+            }
+            let f = to_fraction(ev.event.position.x - px(state.grab), ev.bounds, ev.event.modifiers.alt);
+            if state.preview != Some(f) {
+                update_slider(&move_id, |s| s.preview = Some(f));
+                window.refresh();
             }
         })
-        .on_mouse_up(MouseButton::Left, move |_, window, cx| end_up(&up_id, &commit_up, window, cx))
+        .on_mouse_up(MouseButton::Left, move |_, window, cx| end_drag(&up_id, &commit_up, window, cx))
         .on_mouse_up_out(MouseButton::Left, move |_, window, cx| end_drag(&out_id, &commit_out, window, cx))
         .on_key_down(move |ev, window, cx| {
-            let unit = steps.map_or(0.01, |n| 1. / n as f32);
-            let target = match ev.keystroke.key.as_str() {
+            let key = ev.keystroke.key.as_str();
+            let mods = ev.keystroke.modifiers;
+            if key == "escape" && slider_state(&key_id).preview.is_some() {
+                cx.stop_propagation();
+                update_slider(&key_id, |s| {
+                    s.preview = None;
+                    s.cancelled = true;
+                });
+                window.refresh();
+                return;
+            }
+            let step = steps.map_or(0.01, |n| 1. / n as f32);
+            let unit = if mods.shift {
+                step * 10.
+            } else if mods.control && steps.is_none() {
+                step / 4.
+            } else {
+                step
+            };
+            let target = match key {
                 "left" | "down" => shown - unit,
                 "right" | "up" => shown + unit,
-                "pagedown" => shown - unit * 10.,
-                "pageup" => shown + unit * 10.,
+                "pagedown" => shown - step * 10.,
+                "pageup" => shown + step * 10.,
                 "home" => 0.,
                 "end" => 1.,
+                "delete" | "backspace" => match default {
+                    Some(d) => d,
+                    None => return,
+                },
                 _ => return,
             };
             cx.stop_propagation();
-            let target = snap(target);
-            if target != shown {
-                mark_changed(&key_id);
-                commit_key(target, window, cx);
+            let target = if matches!(key, "delete" | "backspace") { target } else { snap(target) };
+            if target == shown {
+                return;
             }
+            // Show the value for a second after each step.
+            let until = Instant::now() + Duration::from_secs(1);
+            update_slider(&key_id, |s| s.tip_until = Some(until));
+            commit_key(target, window, cx);
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor().timer(Duration::from_millis(1050)).await;
+                    cx.update(|window, _| window.refresh()).ok();
+                })
+                .detach();
         })
         .into_any_element()
 }
