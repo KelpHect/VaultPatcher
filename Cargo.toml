@@ -27,15 +27,23 @@ flate2 = "1"
 tar = "0.4"
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 rodio = { version = "0.20", default-features = false, features = ["symphonia-mp3"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "png", "jpeg"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging"] }
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 winresource = "0.1"
 resvg = { version = "0.45", default-features = false }
+
+# Our fork of gpui (backdrop blur for Fluent acrylic, and more) and of
+# gpui-component (acrylic flyouts). See vendor/README.md.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
+gpui-component = { path = "vendor/gpui-component" }
 
 [profile.dev]
 opt-level = 1
