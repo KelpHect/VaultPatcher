@@ -979,26 +979,11 @@ impl Workspace {
 
     /// Save files the capture tool can load into, newest first.
     pub fn capture_saves(&self) -> Vec<String> {
-        let Some(dir) = self.game().config_dir.as_ref().and_then(|d| d.parent()).map(|d| d.join("SaveData")) else {
-            return Vec::new();
-        };
-        let mut saves: Vec<(std::time::SystemTime, String)> = std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.path().is_dir())
-            .flat_map(|profile| std::fs::read_dir(profile.path()).into_iter().flatten().flatten())
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let lower = name.to_ascii_lowercase();
-                if !(lower.starts_with("save") && lower.ends_with(".sav")) {
-                    return None;
-                }
-                Some((e.metadata().ok()?.modified().ok()?, name))
-            })
-            .collect();
-        saves.sort_by_key(|s| std::cmp::Reverse(s.0));
-        saves.into_iter().map(|(_, n)| n).collect()
+        let game = self.game();
+        match (game.config_dir.as_ref(), game.def.capture) {
+            (Some(dir), Some(profile)) => crate::compare::find_saves(dir, profile),
+            _ => Vec::new(),
+        }
     }
 
     pub fn capture_running(&self) -> bool {
@@ -1018,9 +1003,16 @@ impl Workspace {
             self.toast(ToastKind::Error, "Game install or config folder not found", cx);
             return;
         };
-        let quick_startup = install.root.join("sdk_mods").join("quick_startup.sdkmod");
-        if !matches!(game.sdk, SdkStatus::Installed(_) | SdkStatus::Detected) || !quick_startup.is_file() {
-            self.toast(ToastKind::Error, "Capture needs the Python SDK and the Quick Startup mod — install them from One-Click Setup first", cx);
+        let Some(profile) = def.capture else {
+            self.toast(ToastKind::Error, "Comparison capture isn't available for this game", cx);
+            return;
+        };
+        let prerequisite_missing = profile
+            .prerequisite
+            .and_then(|id| def.component(id))
+            .is_some_and(|c| !self.component_status(c).is_active());
+        if !matches!(game.sdk, SdkStatus::Installed(_) | SdkStatus::Detected) || prerequisite_missing {
+            self.toast(ToastKind::Error, "Capture needs the Python SDK (and Quick Startup for BL2/TPS). Install them from One-Click Setup first", cx);
             return;
         }
         let Some(save) = self.capture_save.clone().or_else(|| self.capture_saves().into_iter().next()) else {
@@ -1047,6 +1039,7 @@ impl Workspace {
             save,
             settle_seconds: self.capture_settle,
             shots,
+            profile,
         };
         self.capture = Some(progress.clone());
         cx.notify();
@@ -1335,6 +1328,15 @@ impl Workspace {
                 let root = need_root()?;
                 Job::Background(Box::new(move || setup::install_sdk_zip(game_id, comp_id, &root, url, folder)))
             }
+            (ComponentKind::Archive { url, dest, skip, enable }, false) => {
+                let root = need_root()?;
+                Job::Background(Box::new(move || setup::install_archive(game_id, comp_id, &root, url, dest, skip, enable)))
+            }
+            (ComponentKind::Hide { path }, false) => Job::Done(setup::hide_file(game_id, comp_id, &need_root()?, path)?),
+            (ComponentKind::Hide { path }, true) => {
+                setup::unhide_file(game_id, comp_id, &need_root()?, path)?;
+                Job::Done("Restored".into())
+            }
             (ComponentKind::TextPatch { game, gearbox_url, .. }, uninstall) => {
                 // Every text patch component shares one merged file, so
                 // adding or removing one rebuilds it from the rest.
@@ -1355,7 +1357,7 @@ impl Workspace {
                     .collect();
                 Job::Background(Box::new(move || setup::rebuild_text_patch(game_id, &root, game, gearbox_url, &parts)))
             }
-            (ComponentKind::Dxvk { .. } | ComponentKind::File { .. } | ComponentKind::SdkZip { .. }, true) => {
+            (ComponentKind::Dxvk { .. } | ComponentKind::File { .. } | ComponentKind::SdkZip { .. } | ComponentKind::Archive { .. }, true) => {
                 setup::uninstall_files(game_id, comp_id, &need_root()?)?;
                 Job::Done("Removed".into())
             }

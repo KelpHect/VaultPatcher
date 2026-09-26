@@ -7,8 +7,8 @@ MarkerPatch (Dead Space 2) and Fallout 76 Quick Configuration. Built in Rust wit
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-component](https://github.com/longbridge/gpui-component).
 
-**Borderlands 2** is fully supported. **The Pre-Sequel** and **Borderlands GOTY Enhanced**
-are in preview (detection, tweaks, presets, SDK install).
+**Borderlands 2** and **Borderlands GOTY Enhanced** are fully supported. **The Pre-Sequel** is
+in preview (detection, tweaks, presets, SDK install).
 
 ## Modes
 

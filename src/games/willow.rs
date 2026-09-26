@@ -58,7 +58,7 @@ pub const CATEGORIES: &[Category] = &[
 // ---- option tables -------------------------------------------------------------
 
 const FRAMERATE_LOCK: &[Opt] = &[
-    opt("0", "Smoothed (custom range)"),
+    opt("0", "Custom range"),
     opt("1", "30"),
     opt("2", "50"),
     opt("3", "60"),
@@ -68,7 +68,9 @@ const FRAMERATE_LOCK: &[Opt] = &[
 ];
 pub(crate) const LOW_MED_HIGH: &[Opt] = &[opt("0", "Low"), opt("1", "Medium"), opt("2", "High")];
 const VIEW_DISTANCE: &[Opt] = &[opt("0", "Low"), opt("1", "Medium"), opt("2", "High"), opt("3", "Ultra High")];
-pub(crate) const DETAIL_HIGH_FIRST: &[Opt] = &[opt("0", "High"), opt("1", "Medium"), opt("2", "Low")];
+/// The engine counts these down (0 is the best), so the values run 2 → 0 to
+/// keep the lowest setting on the left like every other control.
+pub(crate) const DETAIL_LOW_TO_HIGH: &[Opt] = &[opt("2", "Low"), opt("1", "Medium"), opt("0", "High")];
 const DECALS: &[Opt] = &[opt("0", "Off"), opt("1", "Normal"), opt("2", "High")];
 pub(crate) const ANISO: &[Opt] = &[opt("1", "Off"), opt("2", "2x"), opt("4", "4x"), opt("8", "8x"), opt("16", "16x")];
 const SHADOW_RES: &[Opt] = &[opt("512", "512"), opt("1024", "1024"), opt("2048", "2048"), opt("4096", "4096")];
@@ -109,6 +111,7 @@ const WINDOW_MODES: &[Opt] = &[
 ];
 pub(crate) const RESOLUTIONS: &[Opt] = &[
     opt("1280x720", "1280×720"),
+    opt("1280x800", "1280×800 (Steam Deck)"),
     opt("1600x900", "1600×900"),
     opt("1920x1080", "1920×1080"),
     opt("2560x1080", "2560×1080 UW"),
@@ -117,8 +120,8 @@ pub(crate) const RESOLUTIONS: &[Opt] = &[
     opt("3840x2160", "3840×2160"),
     opt("5120x1440", "5120×1440 SUW"),
 ];
-const TEXTURE_BIAS: &[Opt] = &[opt("0", "Full"), opt("1", "Half"), opt("2", "Quarter")];
-const CORPSES: &[Opt] = &[opt("vanilla", "Vanilla (10 min)"), opt("balanced", "Balanced (60 s)"), opt("fast", "Fast (15 s)")];
+pub(crate) const TEXTURE_BIAS: &[Opt] = &[opt("2", "Quarter"), opt("1", "Half"), opt("0", "Full")];
+const CORPSES: &[Opt] = &[opt("fast", "Fast (15 s)"), opt("balanced", "Balanced (60 s)"), opt("vanilla", "Vanilla (10 min)")];
 
 // ---- custom bindings -------------------------------------------------------------
 
@@ -247,14 +250,14 @@ fn with_lod_bias(value: &str, bias: &str) -> Option<String> {
     Some(format!("{}{}{}", &value[..start], bias, &value[end..]))
 }
 
-fn read_texture_bias(c: &ConfigSet) -> Option<Value> {
+pub(crate) fn read_texture_bias(c: &ConfigSet) -> Option<Value> {
     let v = c.get(&key(E, SS, "TEXTUREGROUP_World"))?;
     let start = v.find("LODBias=")? + "LODBias=".len();
     let bias: String = v[start..].chars().take_while(|ch| ch.is_ascii_digit() || *ch == '-').collect();
     Some(match_choice(TEXTURE_BIAS, &bias))
 }
 
-fn write_texture_bias(c: &mut ConfigSet, v: &Value) {
+pub(crate) fn write_texture_bias(c: &mut ConfigSet, v: &Value) {
     let Value::Choice(bias) = v else { return };
     for file in [E, L] {
         if file == L && !c.file(L).is_some_and(|f| f.exists) {
@@ -485,7 +488,7 @@ pub const TWEAKS: &[Tweak] = &[
     choice("view_distance", "quality", "View distance", "Streaming and draw distance tier. Ultra High doubles the High distance and costs a lot of FPS in open maps.",
         &[key(E, SS, "ViewDistance"), key(L, SS, "ViewDistance")], VIEW_DISTANCE, "2", Impact::High, MENU),
     choice("game_detail", "quality", "Game detail", "What the menu calls Game Detail: population and clutter density.",
-        &[key(E, SS, "PopulationAdjustment"), key(L, SS, "PopulationAdjustment")], DETAIL_HIGH_FIRST, "0", Impact::Medium, MENU),
+        &[key(E, SS, "PopulationAdjustment"), key(L, SS, "PopulationAdjustment")], DETAIL_LOW_TO_HIGH, "0", Impact::Medium, MENU),
     choice("detail_mode", "quality", "Detail mode", "Engine-level world detail (minor meshes and effects). Not exposed in the menu.",
         &[key(E, SS, "DetailMode")], LOW_MED_HIGH, "2", Impact::Low, NONE),
     slider("draw_scale", "quality", "Draw distance scale", "Multiplier on per-object cull distances.",
@@ -521,7 +524,7 @@ pub const TWEAKS: &[Tweak] = &[
 
     // Textures & streaming
     choice("texture_quality", "textures", "Texture quality", "Menu texture quality (0 is the highest).",
-        &[key(E, SS, "TextureQuality"), key(L, SS, "TextureQuality")], DETAIL_HIGH_FIRST, "0", Impact::Medium, MENU),
+        &[key(E, SS, "TextureQuality"), key(L, SS, "TextureQuality")], DETAIL_LOW_TO_HIGH, "0", Impact::Medium, MENU),
     custom("texture_bias", "textures", "Texture resolution cap", "Applies an LOD bias to world, character, weapon and vehicle textures. Half or Quarter saves lots of VRAM on old GPUs.",
         Control::Choice(TEXTURE_BIAS), read_texture_bias, write_texture_bias, C("0"), Impact::Medium, NONE),
     slider("pool_size", "textures", "Texture pool size", "Streaming pool in MB. Raising it reduces blurry textures, but the 32-bit exe can run out of memory above ~1000.",
@@ -932,6 +935,24 @@ pub const QUICK: &[crate::games::QuickSection] = &[
     },
 ];
 
+/// BL2 and TPS load straight into a save with Quick Startup's `-Character=`.
+pub const CAPTURE: crate::compare::CaptureProfile = crate::compare::CaptureProfile {
+    load: crate::compare::CaptureLoad::CharacterArg,
+    launch_args: &["-NoLauncher", "-nostartupmovies"],
+    settings: &[
+        (E, "Engine.Engine", "bSubtitlesForcedOff", "TRUE"),
+        (E, SS, "Fullscreen", "False"),
+        (E, SS, "WindowedFullscreen", "True"),
+        (L, SS, "Fullscreen", "False"),
+        (L, SS, "WindowedFullscreen", "True"),
+    ],
+    turn: 0,
+    hud: crate::compare::HudHide::ToggleHud,
+    prerequisite: Some("quick_startup"),
+    saves: r"..\SaveData",
+    save_subfolders: true,
+};
+
 const NV: &str = "https://international.download.nvidia.com/geforce-com/international/comparisons/borderlands-2-tweak-guide/borderlands-2-tweak-guide-";
 
 /// Settings that get comparison images. Links point at Nvidia's official
@@ -996,71 +1017,6 @@ pub const PRESETS: &[Preset] = &[
         ],
     },
     Preset {
-        id: "ultra",
-        name: "Pandora Ultra",
-        rarity: Rarity::Legendary,
-        description: "Everything maxed and a bit beyond: Ultra High view distance, 4096 sun shadows, a larger texture pool and every effect on. Needs a strong GPU.",
-        values: &[
-            ("view_distance", C("3")),
-            ("game_detail", C("0")),
-            ("detail_mode", C("2")),
-            ("foliage", N(1.0)),
-            ("texture_quality", C("0")),
-            ("texture_bias", C("0")),
-            ("pool_size", N(600.0)),
-            ("aniso", C("16")),
-            ("ao", B(true)),
-            ("bloom", B(true)),
-            ("light_shafts", B(true)),
-            ("dynamic_shadows", B(true)),
-            ("scene_shadow_res", C("4096")),
-            ("shadow_res_min", C("2048")),
-            ("shadow_res_max", C("2048")),
-            ("decals", C("2")),
-            ("dynamic_lights", B(true)),
-        ],
-    },
-    Preset {
-        id: "balanced",
-        name: "Balanced",
-        rarity: Rarity::Rare,
-        description: "High quality with the costliest effects trimmed: High view distance, 2048 shadows, no motion blur or DOF, PhysX Low.",
-        values: &[
-            ("view_distance", C("2")),
-            ("game_detail", C("0")),
-            ("foliage", N(0.75)),
-            ("aniso", C("16")),
-            ("ao", B(true)),
-            ("light_shafts", B(true)),
-            ("dof", B(false)),
-            ("motion_blur", B(false)),
-            ("scene_shadow_res", C("2048")),
-            ("physx", C("0")),
-            ("pool_size", N(400.0)),
-        ],
-    },
-    Preset {
-        id: "performance",
-        name: "Competitive FPS",
-        rarity: Rarity::Uncommon,
-        description: "Maximum framerate while keeping the art style: uncapped FPS, no light shafts, distortion, AO or DOF, PhysX Low, fast corpse cleanup.",
-        values: &[
-            ("fps_lock", C("6")),
-            ("vsync", B(false)),
-            ("one_frame_lag", B(false)),
-            ("ao", B(false)),
-            ("light_shafts", B(false)),
-            ("distortion", B(false)),
-            ("dof", B(false)),
-            ("motion_blur", B(false)),
-            ("lens_flares", B(false)),
-            ("physx", C("0")),
-            ("foliage", N(0.5)),
-            ("view_distance", C("2")),
-            ("corpses", C("balanced")),
-        ],
-    },
-    Preset {
         id: "potato",
         name: "Potato Mode",
         rarity: Rarity::Common,
@@ -1088,6 +1044,71 @@ pub const PRESETS: &[Preset] = &[
             ("mesh_lod", N(2.0)),
             ("particle_lod", N(2.0)),
             ("corpses", C("fast")),
+        ],
+    },
+    Preset {
+        id: "performance",
+        name: "Competitive FPS",
+        rarity: Rarity::Uncommon,
+        description: "Maximum framerate while keeping the art style: uncapped FPS, no light shafts, distortion, AO or DOF, PhysX Low, fast corpse cleanup.",
+        values: &[
+            ("fps_lock", C("6")),
+            ("vsync", B(false)),
+            ("one_frame_lag", B(false)),
+            ("ao", B(false)),
+            ("light_shafts", B(false)),
+            ("distortion", B(false)),
+            ("dof", B(false)),
+            ("motion_blur", B(false)),
+            ("lens_flares", B(false)),
+            ("physx", C("0")),
+            ("foliage", N(0.5)),
+            ("view_distance", C("2")),
+            ("corpses", C("balanced")),
+        ],
+    },
+    Preset {
+        id: "balanced",
+        name: "Balanced",
+        rarity: Rarity::Rare,
+        description: "High quality with the costliest effects trimmed: High view distance, 2048 shadows, no motion blur or DOF, PhysX Low.",
+        values: &[
+            ("view_distance", C("2")),
+            ("game_detail", C("0")),
+            ("foliage", N(0.75)),
+            ("aniso", C("16")),
+            ("ao", B(true)),
+            ("light_shafts", B(true)),
+            ("dof", B(false)),
+            ("motion_blur", B(false)),
+            ("scene_shadow_res", C("2048")),
+            ("physx", C("0")),
+            ("pool_size", N(400.0)),
+        ],
+    },
+    Preset {
+        id: "ultra",
+        name: "Pandora Ultra",
+        rarity: Rarity::Legendary,
+        description: "Everything maxed and a bit beyond: Ultra High view distance, 4096 sun shadows, a larger texture pool and every effect on. Needs a strong GPU.",
+        values: &[
+            ("view_distance", C("3")),
+            ("game_detail", C("0")),
+            ("detail_mode", C("2")),
+            ("foliage", N(1.0)),
+            ("texture_quality", C("0")),
+            ("texture_bias", C("0")),
+            ("pool_size", N(600.0)),
+            ("aniso", C("16")),
+            ("ao", B(true)),
+            ("bloom", B(true)),
+            ("light_shafts", B(true)),
+            ("dynamic_shadows", B(true)),
+            ("scene_shadow_res", C("4096")),
+            ("shadow_res_min", C("2048")),
+            ("shadow_res_max", C("2048")),
+            ("decals", C("2")),
+            ("dynamic_lights", B(true)),
         ],
     },
     Preset {

@@ -27,6 +27,71 @@ pub struct Comparison {
     pub capture: bool,
 }
 
+/// How the capture tool gets a game into a save and what it writes around
+/// each shot. One per engine family.
+pub struct CaptureProfile {
+    pub load: CaptureLoad,
+    /// Launch switches for every shot.
+    pub launch_args: &'static [&'static str],
+    /// (file id, section, key, value) written for every shot: borderless so
+    /// the window can be read, no subtitles, no launcher or intro movies.
+    pub settings: &'static [(&'static str, &'static str, &'static str, &'static str)],
+    /// Camera yaw added after spawning (65536 = a full turn), to face a
+    /// better view than the save's.
+    pub turn: i32,
+    /// How the HUD is hidden: the `togglehud` command, or closing the HUD's
+    /// Scaleform movie.
+    pub hud: HudHide,
+    /// Setup component that must be installed first (e.g. Quick Startup).
+    pub prerequisite: Option<&'static str>,
+    /// Folder holding the saves, relative to the config folder.
+    pub saves: &'static str,
+    /// Whether saves sit in per-profile subfolders of `saves`.
+    pub save_subfolders: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CaptureLoad {
+    /// `-Character=<save>` (Quick Startup mod).
+    CharacterArg,
+    /// The helper drives the title screen: Continue, single player, start.
+    /// Loads the most recently played character.
+    MainMenu,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HudHide {
+    ToggleHud,
+    CloseMovie,
+}
+
+/// Save files, newest first.
+pub fn find_saves(config_dir: &Path, profile: &CaptureProfile) -> Vec<String> {
+    let dir = config_dir.join(profile.saves);
+    let entries: Vec<fs::DirEntry> = if profile.save_subfolders {
+        fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .flat_map(|p| fs::read_dir(p.path()).into_iter().flatten().flatten())
+            .collect()
+    } else {
+        fs::read_dir(&dir).into_iter().flatten().flatten().collect()
+    };
+    let mut saves: Vec<(std::time::SystemTime, String)> = entries
+        .into_iter()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let lower = name.to_ascii_lowercase();
+            (lower.starts_with("save") && lower.ends_with(".sav")).then_some(())?;
+            Some((e.metadata().ok()?.modified().ok()?, name))
+        })
+        .collect();
+    saves.sort_by_key(|s| std::cmp::Reverse(s.0));
+    saves.into_iter().map(|(_, n)| n).collect()
+}
+
 pub fn comparisons_dir() -> PathBuf {
     backup::data_dir().join("comparisons")
 }
@@ -162,6 +227,7 @@ pub struct CaptureRequest {
     pub save: String,
     pub settle_seconds: u32,
     pub shots: Vec<(&'static Tweak, Value, String)>,
+    pub profile: &'static CaptureProfile,
 }
 
 const HELPER_DIR: &str = "sdk_mods/vault_capture";
@@ -170,10 +236,11 @@ const HELPER_DIR: &str = "sdk_mods/vault_capture";
 /// `job.json` exists next to it, which only happens during a capture run.
 const HELPER_PY: &str = r#""""Vault Patcher comparison capture helper.
 
-Only active while Vault Patcher is capturing comparison images: once the
-player has spawned and the world has settled it closes popups, hides the HUD
-and weapon, tells Vault Patcher to grab the frame, then quits. Removed
-automatically when the capture run ends.
+Only active while Vault Patcher is capturing comparison images: it gets the
+game into a save (driving the title screen when the game has no load switch),
+waits for the world to settle, closes popups, hides the HUD and weapon, tells
+Vault Patcher to grab the frame, then quits. Removed automatically when the
+capture run ends.
 """
 
 import json
@@ -185,14 +252,19 @@ from mods_base import build_mod, hook
 from unrealsdk import logging
 
 _DIR = Path(__file__).parent
-_state: dict[str, Any] = {"job": None, "elapsed": 0.0, "stage": 0}
+_state: dict[str, Any] = {"job": None, "elapsed": 0.0, "stage": 0, "menu": 0, "menu_t": 0.0}
+
+
+def _live(cls_name: str) -> list[Any]:
+    try:
+        return [o for o in unrealsdk.find_all(cls_name) if not o.Name.startswith("Default__")]
+    except ValueError:
+        return []
 
 
 def _close_dialogs() -> None:
     """Close popups such as the golden keys / SHiFT notice shown on load."""
-    for dialog in unrealsdk.find_all("WillowGFxDialogBox", exact=False):
-        if dialog.Name.startswith("Default__"):
-            continue
+    for dialog in _live("WillowGFxDialogBox"):
         try:
             dialog.Close()
             logging.info(f"[vault_capture] closed dialog {dialog.Name}")
@@ -205,9 +277,47 @@ def _load_job() -> None:
         _state["job"] = json.loads((_DIR / "job.json").read_text())
     except (OSError, ValueError):
         _state["job"] = None
-    _state["elapsed"] = 0.0
-    _state["stage"] = 0
+    _state.update(elapsed=0.0, stage=0, menu=0, menu_t=0.0)
     logging.info(f"[vault_capture] enabled, job={_state['job']}")
+
+
+def _drive_menu(dt: float) -> None:
+    """Title screen -> Continue -> single player lobby -> start, a step every few seconds."""
+    _state["menu_t"] += dt
+    if _state["menu_t"] < 6:
+        return
+    _state["menu_t"] = 0.0
+    step = _state["menu"]
+    try:
+        if step == 0:
+            for movie in _live("WillowGFxMoviePressStart"):
+                movie.extContinue()
+        elif step == 1:
+            for movie in _live("WillowGFxMenuFrontend"):
+                movie.OpenSP()
+        else:
+            lobbies = [lobby for lobby in _live("WillowGFxMenuLobby2") if "Transient" in str(lobby)]
+            if lobbies:
+                lobbies[-1].DoStartGame()
+        logging.info(f"[vault_capture] menu step {step}")
+    except Exception as ex:  # noqa: BLE001 - retried on the next step
+        logging.warning(f"[vault_capture] menu step {step}: {ex}")
+    _state["menu"] = min(step + 1, 2)
+
+
+def _hide_hud(pc: Any, how: str) -> None:
+    if how == "close":
+        for movie in _live("WillowHUDGFxMovie"):
+            try:
+                movie.Close(False)
+            except Exception as ex:  # noqa: BLE001
+                logging.warning(f"[vault_capture] couldn't close the HUD: {ex}")
+        try:
+            pc.myHUD.bShowHUD = False
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        pc.ConsoleCommand("togglehud", False)
 
 
 def _hide_weapon(pc: Any) -> None:
@@ -225,14 +335,30 @@ def _hide_weapon(pc: Any) -> None:
             logging.warning(f"[vault_capture] couldn't hide {label}: {ex}")
 
 
+def _turn(pc: Any, yaw: int) -> None:
+    if not yaw:
+        return
+    rot = unrealsdk.make_struct("Rotator", Pitch=pc.Rotation.Pitch, Yaw=(pc.Rotation.Yaw + yaw) % 65536, Roll=0)
+    pc.Rotation = rot
+    try:
+        pc.ClientSetRotation(rot)
+    except Exception as ex:  # noqa: BLE001
+        logging.warning(f"[vault_capture] couldn't turn: {ex}")
+
+
 @hook("Engine.PlayerController:PlayerTick")
 def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
     job = _state["job"]
-    if job is None or obj.Pawn is None:
+    if job is None:
+        return
+    map_name = str(obj.WorldInfo.GetMapName(False)).lower()
+    if obj.Pawn is None or map_name in ("loader", "menumap"):
         _state["elapsed"] = 0.0
+        if job.get("load") == "menu" and map_name == "menumap":
+            _drive_menu(args.DeltaTime)
         return
     if _state["elapsed"] == 0.0 and _state["stage"] == 0:
-        logging.info("[vault_capture] player spawned")
+        logging.info(f"[vault_capture] player spawned in {map_name}")
         _close_dialogs()
     _state["elapsed"] += args.DeltaTime
     stage = _state["stage"]
@@ -240,7 +366,8 @@ def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
     if stage == 0 and _state["elapsed"] >= job.get("settle_seconds", 20):
         logging.info("[vault_capture] world settled; hiding HUD and weapon")
         _close_dialogs()
-        obj.ConsoleCommand("togglehud", False)
+        _turn(obj, int(job.get("turn", 0)))
+        _hide_hud(obj, job.get("hud", "toggle"))
         _hide_weapon(obj)
         _state["stage"], _state["elapsed"] = 1, 0.0
     elif stage == 1 and _state["elapsed"] >= 1.5:
@@ -261,7 +388,7 @@ def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
 build_mod(
     name="Vault Patcher Capture Helper",
     author="Vault Patcher",
-    version="1.0",
+    version="1.1",
     description="Takes comparison screenshots during a Vault Patcher capture run. Inactive otherwise.",
     hooks=[_tick],
     auto_enable=True,
@@ -417,15 +544,9 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
             }
             let mut config = original.clone();
             tweak.write(&mut config, value);
-            // Keep dialogue subtitles out of the shots, and run borderless so
-            // the frame can be read from the window. Restored afterwards.
-            config.set(&crate::tweaks::key("engine", "Engine.Engine", "bSubtitlesForcedOff"), "TRUE");
-            for (file, section, name, v) in [
-                ("engine", "SystemSettings", "Fullscreen", "False"),
-                ("engine", "SystemSettings", "WindowedFullscreen", "True"),
-                ("launcher", "SystemSettings", "Fullscreen", "False"),
-                ("launcher", "SystemSettings", "WindowedFullscreen", "True"),
-            ] {
+            // Borderless (so the frame can be read from the window), no
+            // subtitles, no launcher or intros. Restored afterwards.
+            for &(file, section, name, v) in req.profile.settings {
                 if config.file(file).is_some_and(|f| f.exists) {
                     config.set(&crate::tweaks::key(file, section, name), v);
                 }
@@ -436,11 +557,22 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
             for flag in ["ready.flag", "captured.flag", "done.flag"] {
                 let _ = fs::remove_file(helper.join(flag));
             }
-            fs::write(helper.join("job.json"), serde_json::json!({"settle_seconds": req.settle_seconds, "token": token}).to_string())?;
+            let job = serde_json::json!({
+                "settle_seconds": req.settle_seconds,
+                "token": token,
+                "load": if req.profile.load == CaptureLoad::MainMenu { "menu" } else { "arg" },
+                "turn": req.profile.turn,
+                "hud": if req.profile.hud == HudHide::CloseMovie { "close" } else { "toggle" },
+            });
+            fs::write(helper.join("job.json"), job.to_string())?;
 
+            let mut args: Vec<String> = req.profile.launch_args.iter().map(|a| a.to_string()).collect();
+            if req.profile.load == CaptureLoad::CharacterArg {
+                args.push(format!("-Character={}", req.save));
+            }
             let clock = Instant::now();
             let child = Command::new(&req.exe)
-                .args(["-NoLauncher", "-nostartupmovies", &format!("-Character={}", req.save)])
+                .args(&args)
                 .current_dir(req.exe.parent().unwrap_or(&req.root))
                 .spawn()
                 .context("launching the game")?;
@@ -645,6 +777,7 @@ mod run_tests {
             save: "Save0001.sav".into(),
             settle_seconds: 1,
             shots: vec![(tweak, Value::Bool(false), "Off".into())],
+            profile: &crate::games::willow::CAPTURE,
         };
         assert!(run(req, progress.clone()).is_err());
         assert_eq!(fs::read_to_string(config_dir.join("WillowEngine.ini")).unwrap(), engine);

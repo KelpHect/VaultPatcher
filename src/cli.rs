@@ -3,6 +3,7 @@
 //!
 //! `VaultPatcher.exe --capture <game> [--save Save0001.sav] [--settle 25] [--only a,b] [--limit N]`
 //! `VaultPatcher.exe --package-comparisons <game> [--out comparisons-<game>.zip]`
+//! `VaultPatcher.exe --install-sdk <game>`
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -35,6 +36,18 @@ pub fn run(args: &[String]) -> Option<i32> {
             }
         });
     }
+    if let Some(game) = arg(args, "--install-sdk") {
+        return Some(match install_sdk(&game) {
+            Ok(v) => {
+                println!("installed {v}");
+                0
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                1
+            }
+        });
+    }
     let game = arg(args, "--capture")?;
     Some(match capture(&game, args) {
         Ok(()) => 0,
@@ -43,6 +56,23 @@ pub fn run(args: &[String]) -> Option<i32> {
             1
         }
     })
+}
+
+/// Installs (or updates) a game's mod SDK exactly as One-Click Setup does.
+fn install_sdk(game_id: &str) -> Result<String> {
+    let def = games::all().iter().find(|g| g.id == game_id).context("unknown game id")?;
+    let settings = AppSettings::load();
+    let root = settings
+        .manual_installs
+        .get(def.id)
+        .cloned()
+        .or_else(|| detect::detect(&def.detect_spec()).map(|i| i.root))
+        .context("game install not found")?;
+    if compare::game_running(&root.join(def.exe)) {
+        bail!("close the game first");
+    }
+    let support = def.mods.context("this game has no SDK support")?;
+    mods::install_sdk_latest(def.id, support, &root)
 }
 
 fn capture(game_id: &str, args: &[String]) -> Result<()> {
@@ -68,17 +98,18 @@ fn capture(game_id: &str, args: &[String]) -> Result<()> {
         println!("installing {}…", support.sdk_name);
         println!("  {}", mods::install_sdk_latest(def.id, support, &root)?);
     }
-    let quick = def.component("quick_startup").context("no Quick Startup component")?;
-    if let ComponentKind::File { url, dest, enable } = quick.kind
+    let profile = def.capture.context("comparison capture isn't available for this game")?;
+    if let Some(prereq) = profile.prerequisite.and_then(|id| def.component(id))
+        && let ComponentKind::File { url, dest, enable } = prereq.kind
         && !root.join(dest).is_file()
     {
-        println!("installing Quick Startup…");
-        setup::install_file(def.id, quick.id, &root, url, dest, enable)?;
+        println!("installing {}…", prereq.name);
+        setup::install_file(def.id, prereq.id, &root, url, dest, enable)?;
     }
 
     let save = match arg(args, "--save") {
         Some(s) => s,
-        None => newest_save(&config_dir).context("no save files found")?,
+        None => compare::find_saves(&config_dir, profile).into_iter().next().context("no save files found")?,
     };
     let settle = arg(args, "--settle").and_then(|s| s.parse().ok()).unwrap_or(25);
     let only: Option<Vec<String>> = arg(args, "--only").map(|s| s.split(',').map(str::to_string).collect());
@@ -107,6 +138,7 @@ fn capture(game_id: &str, args: &[String]) -> Result<()> {
         save,
         settle_seconds: settle,
         shots,
+        profile,
     };
     let worker = {
         let progress = progress.clone();
@@ -129,17 +161,3 @@ fn capture(game_id: &str, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn newest_save(config_dir: &std::path::Path) -> Option<String> {
-    let data = config_dir.parent()?.join("SaveData");
-    std::fs::read_dir(data)
-        .ok()?
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .flat_map(|p| std::fs::read_dir(p.path()).into_iter().flatten().flatten())
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().to_ascii_lowercase();
-            n.starts_with("save") && n.ends_with(".sav")
-        })
-        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-}

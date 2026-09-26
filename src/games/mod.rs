@@ -128,6 +128,8 @@ pub struct GameDef {
     pub setup: &'static [crate::setup::Component],
     /// Settings with comparison images or links.
     pub comparisons: &'static [crate::compare::Comparison],
+    /// How the comparison capture tool runs this game (None: not supported).
+    pub capture: Option<&'static crate::compare::CaptureProfile>,
 }
 
 /// A command-line switch offered on the Launch page.
@@ -232,3 +234,42 @@ pub const COMMON_NAV: NavGroup = NavGroup {
         },
     ],
 };
+
+#[cfg(test)]
+mod ordering_tests {
+    use crate::tweaks::Control;
+
+    fn leading_number(label: &str) -> Option<f64> {
+        let digits: String = label.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        digits.parse().ok()
+    }
+
+    /// Every choice reads lowest → highest, left → right.
+    #[test]
+    fn choices_run_from_lowest_to_highest() {
+        for game in super::all() {
+            for tweak in game.visible_tweaks() {
+                let Control::Choice(options) = tweak.control else { continue };
+                let labels: Vec<&str> = options.iter().map(|o| o.label).collect();
+                let at = |l: &str| labels.iter().position(|x| x.eq_ignore_ascii_case(l));
+                let ctx = format!("{} / {}: {labels:?}", game.id, tweak.id);
+
+                // Named quality scales.
+                let scale: Vec<usize> = ["Low", "Medium", "High", "Ultra High"].iter().filter_map(|l| at(l)).collect();
+                assert!(scale.windows(2).all(|w| w[0] < w[1]), "quality scale out of order in {ctx}");
+
+                // Numeric options ascend; "Off" leads and "Unlimited" trails.
+                let numbers: Vec<f64> = labels.iter().filter_map(|l| leading_number(l)).collect();
+                if numbers.len() >= 2 {
+                    assert!(numbers.windows(2).all(|w| w[0] <= w[1]), "numbers not ascending in {ctx}");
+                    if let Some(off) = at("Off") {
+                        assert_eq!(off, 0, "Off should be leftmost in {ctx}");
+                    }
+                    if let Some(unlimited) = at("Unlimited") {
+                        assert_eq!(unlimited, labels.len() - 1, "Unlimited should be rightmost in {ctx}");
+                    }
+                }
+            }
+        }
+    }
+}

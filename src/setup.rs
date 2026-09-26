@@ -91,6 +91,19 @@ pub enum ComponentKind {
     },
     /// A zipped SDK mod whose single top-level `folder` goes into `sdk_mods`.
     SdkZip { url: &'static str, folder: &'static str },
+    /// A zip extracted into `dest` (relative to the install root), e.g. an
+    /// SDK mod zipped without a root folder, or an ASI plugin pack.
+    Archive {
+        url: &'static str,
+        dest: &'static str,
+        /// Entries (by top-level name) that aren't installed, e.g. readmes.
+        skip: &'static [&'static str],
+        /// SDK module to switch on after install.
+        enable: Option<&'static str>,
+    },
+    /// A game file moved aside (renamed with `.vp-hidden`), e.g. an in-game
+    /// ad. Uninstalling puts it back.
+    Hide { path: &'static str },
     /// Text mod sources merged (with every other `TextPatch` component of
     /// the game) into one offline file that Text Mod Loader auto-runs.
     TextPatch {
@@ -210,6 +223,27 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
                 Status::Missing
             }
         }
+        ComponentKind::Archive { dest, .. } => {
+            let Some(root) = root else { return needs_install() };
+            match manifest::read(game.def.id, c.id) {
+                Some(m) if m.files.iter().all(|f| f.is_file() || disabled_twin(f).is_some_and(|p| p.is_file())) && root.join(dest).exists() => {
+                    Status::Active(None)
+                }
+                Some(_) => Status::Partial,
+                None => Status::Missing,
+            }
+        }
+        ComponentKind::Hide { path } => {
+            let Some(root) = root else { return needs_install() };
+            let file = root.join(path);
+            if hidden_twin(&file).is_file() && !file.exists() {
+                Status::Active(None)
+            } else if file.is_file() {
+                Status::Missing
+            } else {
+                Status::Blocked("File not found in this version of the game".into())
+            }
+        }
         ComponentKind::TextPatch { .. } => {
             let Some(root) = root else { return needs_install() };
             let included = text_patch_parts(game.def.id);
@@ -235,9 +269,12 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
 /// may undo it). Things the player installed by hand are left alone.
 pub fn installed_by_us(c: &Component, game: &GameState, launch_args: &[String]) -> bool {
     match c.kind {
-        ComponentKind::Settings { .. } | ComponentKind::Dxvk { .. } | ComponentKind::File { .. } | ComponentKind::SdkZip { .. } => {
-            manifest::read(game.def.id, c.id).is_some()
-        }
+        ComponentKind::Settings { .. }
+        | ComponentKind::Dxvk { .. }
+        | ComponentKind::File { .. }
+        | ComponentKind::SdkZip { .. }
+        | ComponentKind::Archive { .. }
+        | ComponentKind::Hide { .. } => manifest::read(game.def.id, c.id).is_some(),
         ComponentKind::Sdk => manifest::read(game.def.id, "sdk").is_some(),
         ComponentKind::TextPatch { .. } => text_patch_parts(game.def.id).iter().any(|p| p == c.id),
         ComponentKind::LaunchArg(arg) => launch_args.iter().any(|a| a.eq_ignore_ascii_case(arg)),
@@ -339,6 +376,86 @@ fn enable_sdk_module(root: &Path, module: &str) -> Result<()> {
         fs::write(settings, "{\n    \"enabled\": true\n}\n")?;
     }
     Ok(())
+}
+
+fn hidden_twin(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".vp-hidden");
+    path.with_file_name(name)
+}
+
+/// Moves a game file aside (reversibly).
+pub fn hide_file(game_id: &str, component: &str, root: &Path, path: &str) -> Result<String> {
+    let file = root.join(path);
+    let hidden = hidden_twin(&file);
+    if !file.is_file() {
+        bail!("{} not found", file.display());
+    }
+    manifest::write(game_id, component, &Manifest { version: "hidden".into(), files: Vec::new(), replaced: None })?;
+    backup::clear_readonly(&file);
+    fs::rename(&file, &hidden).with_context(|| format!("moving {} aside (close the game first)", file.display()))?;
+    Ok("Done".into())
+}
+
+/// Puts a hidden game file back.
+pub fn unhide_file(game_id: &str, component: &str, root: &Path, path: &str) -> Result<()> {
+    let file = root.join(path);
+    let hidden = hidden_twin(&file);
+    if hidden.is_file() && !file.exists() {
+        fs::rename(&hidden, &file).with_context(|| format!("restoring {}", file.display()))?;
+    }
+    manifest::remove(game_id, component);
+    Ok(())
+}
+
+/// Downloads a zip and extracts it into `dest`, recording every file so
+/// uninstall removes exactly what was added (and restores anything replaced).
+pub fn install_archive(
+    game_id: &str,
+    component: &str,
+    root: &Path,
+    url: &str,
+    dest: &str,
+    skip: &[&str],
+    enable: Option<&str>,
+) -> Result<String> {
+    let tmp = std::env::temp_dir().join(format!("vaultpatcher-{component}.zip"));
+    net::download(url, &tmp)?;
+    let mut archive = zip::ZipArchive::new(fs::File::open(&tmp)?).context("not a valid zip")?;
+    let dest_dir = root.join(dest);
+    let wanted = |name: &str| {
+        !name.split('/').any(|p| p == ".." || p.contains(':'))
+            && !name.starts_with('/')
+            && !skip.iter().any(|s| name.split('/').next().is_some_and(|top| top.eq_ignore_ascii_case(s)))
+    };
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().filter(|e| !e.is_dir()).map(|e| e.name().replace('\\', "/")))
+        .filter(|n| wanted(n))
+        .collect();
+    if names.is_empty() {
+        bail!("{url} contains nothing to install");
+    }
+    let targets: Vec<PathBuf> = names.iter().map(|n| dest_dir.join(n)).collect();
+    let replaced = manifest::plan_replace(game_id, component, &format!("Before installing {component}"), &targets)?;
+    manifest::write(game_id, component, &Manifest { version: "latest".into(), files: targets.clone(), replaced })?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().replace('\\', "/");
+        if entry.is_dir() || !wanted(&name) {
+            continue;
+        }
+        let out = dest_dir.join(&name);
+        fs::create_dir_all(out.parent().expect("zip entry has a parent"))?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        backup::clear_readonly(&out);
+        fs::write(&out, bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
+    }
+    fs::remove_file(&tmp).ok();
+    if let Some(module) = enable {
+        enable_sdk_module(root, module)?;
+    }
+    Ok("latest".into())
 }
 
 /// Downloads a zipped SDK mod and extracts its folder into `sdk_mods`.
@@ -536,7 +653,11 @@ mod live_tests {
     fn live_every_download_url_resolves() {
         for game in crate::games::all() {
             for c in game.setup {
-                if let ComponentKind::File { url, .. } = c.kind {
+                let url = match c.kind {
+                    ComponentKind::File { url, .. } | ComponentKind::SdkZip { url, .. } | ComponentKind::Archive { url, .. } => Some(url),
+                    _ => None,
+                };
+                if let Some(url) = url {
                     let status = ureq::head(url).set("User-Agent", "VaultPatcher-test").call().map(|r| r.status());
                     println!("{:<5} {:<16} {:?}", game.id, c.id, status);
                     assert_eq!(status.ok(), Some(200), "{} {}", game.id, c.id);
@@ -637,6 +758,69 @@ mod live_tests {
         assert!(root.join("Binaries/Win32/dxvk.conf").is_file());
         uninstall_files("sandbox", "dxvk", &root).unwrap();
         assert!(!dll.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Installs every downloadable BL1E component into a temp folder shaped
+    /// like the game, checks the layout, then uninstalls and checks it's clean.
+    #[test]
+    #[ignore]
+    fn live_bl1e_components_install_and_uninstall() {
+        let game = &crate::games::bl1e::GAME;
+        let root = std::env::temp_dir().join("vaultpatcher-bl1e-install-sandbox");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Binaries/Win64")).unwrap();
+        let upk = root.join("WillowGame/CookedPC/Packages/Interface/ui_frontend_upsell_PC.upk");
+        fs::create_dir_all(upk.parent().unwrap()).unwrap();
+        fs::write(&upk, b"upk").unwrap();
+        let id = "sandbox-bl1e";
+
+        let version = crate::mods::install_sdk_latest(id, game.mods.unwrap(), &root).unwrap();
+        println!("SDK {version}");
+        assert!(root.join("Binaries/Win64/dinput8.dll").is_file(), "SDK loader");
+        assert!(root.join("Binaries/Win64/Plugins/unrealsdk.dll").is_file());
+        assert!(root.join("sdk_mods").is_dir());
+
+        for c in game.setup {
+            let result = match c.kind {
+                ComponentKind::File { url, dest, enable } => install_file(id, c.id, &root, url, dest, enable),
+                ComponentKind::Archive { url, dest, skip, enable } => install_archive(id, c.id, &root, url, dest, skip, enable),
+                ComponentKind::Hide { path } => hide_file(id, c.id, &root, path),
+                ComponentKind::Dxvk { target, exe_dir, conf } => install_dxvk(id, c.id, &root, target, exe_dir, conf),
+                _ => continue,
+            };
+            println!("{:<18} {:?}", c.id, result);
+            result.unwrap();
+            if let ComponentKind::File { dest, enable: Some(module), .. } = c.kind {
+                // The module name we enable must be the .sdkmod's root folder.
+                let archive = zip::ZipArchive::new(fs::File::open(root.join(dest)).unwrap()).unwrap();
+                assert!(archive.file_names().any(|n| n.starts_with(&format!("{module}/"))), "{} root folder isn't {module}", c.id);
+            }
+            if let ComponentKind::File { enable: Some(module), .. } | ComponentKind::Archive { enable: Some(module), .. } = c.kind {
+                assert!(root.join(format!("sdk_mods/settings/{module}.json")).is_file(), "{} not enabled", c.id);
+            }
+        }
+        assert!(root.join("sdk_mods/BloodwingReturnFix/__init__.py").is_file());
+        assert!(root.join("Binaries/Win64/winmm.dll").is_file() && root.join("Binaries/Win64/scripts/BorderlandsGOTYEnhancedFix.asi").is_file());
+        assert!(!root.join("Binaries/Win64/README.txt").exists());
+        assert!(!upk.exists() && upk.with_file_name("ui_frontend_upsell_PC.upk.vp-hidden").is_file());
+        let dxgi = fs::read(root.join("Binaries/Win64/dxgi.dll")).unwrap();
+        let pe = u32::from_le_bytes(dxgi[0x3C..0x40].try_into().unwrap()) as usize;
+        assert_eq!(u16::from_le_bytes([dxgi[pe + 4], dxgi[pe + 5]]), 0x8664, "DXVK must be 64-bit for BL1E");
+
+        for c in game.setup {
+            match c.kind {
+                ComponentKind::File { .. } | ComponentKind::Archive { .. } | ComponentKind::Dxvk { .. } => uninstall_files(id, c.id, &root).unwrap(),
+                ComponentKind::Hide { path } => unhide_file(id, c.id, &root, path).unwrap(),
+                _ => {}
+            }
+        }
+        assert!(upk.is_file(), "ad restored");
+        for gone in ["Binaries/Win64/version.dll", "Binaries/Win64/winmm.dll", "Binaries/Win64/dxgi.dll", "Binaries/Win64/d3d11.dll", "sdk_mods/BloodwingReturnFix/__init__.py", "sdk_mods/AutopickupBL1E.sdkmod"] {
+            assert!(!root.join(gone).exists(), "{gone} left behind");
+        }
+        crate::mods::uninstall_sdk(id, game.mods.unwrap(), &root).unwrap();
+        assert!(!root.join("Binaries/Win64/dinput8.dll").exists(), "SDK loader left behind");
         let _ = fs::remove_dir_all(&root);
     }
 }

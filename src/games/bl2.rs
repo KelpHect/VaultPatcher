@@ -184,4 +184,5 @@ pub static GAME: GameDef = GameDef {
     quick: willow::QUICK,
     setup: willow::BL2_SETUP,
     comparisons: willow::COMPARISONS,
+    capture: Some(&willow::CAPTURE),
 };

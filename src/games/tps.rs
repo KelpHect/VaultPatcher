@@ -50,4 +50,5 @@ pub static GAME: GameDef = GameDef {
     quick: willow::QUICK,
     setup: willow::TPS_SETUP,
     comparisons: willow::COMPARISONS,
+    capture: Some(&willow::CAPTURE),
 };
