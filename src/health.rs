@@ -22,12 +22,23 @@ pub struct Check {
     pub level: Level,
     pub title: String,
     pub detail: String,
-    /// Where to go to fix it.
-    pub fix: Option<(&'static str, PageKind)>,
+    /// Buttons that fix it: (label, what it does).
+    pub fixes: Vec<(&'static str, Fix)>,
+}
+
+/// What a check's button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fix {
+    /// Go to the page where it's fixed.
+    Go(PageKind),
+    /// Put back everything Vault Patcher wrote.
+    Reapply,
+    /// Keep what's on disk now: Re-apply stops putting the old values back.
+    KeepCurrent,
 }
 
 fn check(level: Level, title: impl Into<String>, detail: impl Into<String>, fix: Option<(&'static str, PageKind)>) -> Check {
-    Check { level, title: title.into(), detail: detail.into(), fix }
+    Check { level, title: title.into(), detail: detail.into(), fixes: fix.map(|(label, page)| (label, Fix::Go(page))).into_iter().collect() }
 }
 
 pub fn checks(ws: &Workspace) -> Vec<Check> {
@@ -150,10 +161,9 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
 
     // Something rewrote what Vault Patcher last saved — the game's launcher
     // keeping its own video settings, an in-game menu, "verify files"...
-    let drifted = crate::applied::resolve(def, &game.applied)
-        .iter()
-        .filter(|(t, want)| game.current(t).as_ref() != Some(want))
-        .count();
+    // (Without the settings files every value would look changed; that has
+    // its own check above.)
+    let drifted = if game.config_found() { crate::applied::drifted(def, &game.applied, |t| game.current(t)) } else { 0 };
     let reverted = applied_patches_reverted(game);
     if drifted + reverted > 0 {
         let mut parts = Vec::new();
@@ -163,12 +173,12 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         if reverted > 0 {
             parts.push(format!("{reverted} exe patch(es)"));
         }
-        out.push(check(
-            Level::Warn,
-            format!("{} changed outside Vault Patcher", parts.join(" · ")),
-            "The game or its launcher rewrote them — Re-apply puts them all back.",
-            Some(("Re-apply", PageKind::Setup)),
-        ));
+        out.push(Check {
+            level: Level::Warn,
+            title: format!("{} changed outside Vault Patcher", parts.join(" · ")),
+            detail: "Re-apply puts them back. Changed them in the game on purpose? Keep them.".into(),
+            fixes: vec![("Re-apply", Fix::Reapply), ("Keep", Fix::KeepCurrent)],
+        });
     }
 
     out.sort_by_key(|c| c.level);

@@ -278,8 +278,9 @@ pub fn installed_by_us(c: &Component, game: &GameState, launch_args: &[String]) 
         ComponentKind::Sdk => manifest::read(game.def.id, "sdk").is_some(),
         ComponentKind::TextPatch { .. } => text_patch_parts(game.def.id).iter().any(|p| p == c.id),
         ComponentKind::LaunchArg(arg) => launch_args.iter().any(|a| a.eq_ignore_ascii_case(arg)),
-        // An exe patch can't be told apart from how the game shipped.
-        ComponentKind::ExePatch(_) => false,
+        // An exe patch can't be told apart from how the game shipped, so
+        // only the re-apply record says whether we applied it.
+        ComponentKind::ExePatch(id) => game.applied.patches.contains(id),
     }
 }
 

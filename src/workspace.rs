@@ -122,9 +122,34 @@ pub struct SetupRun {
     pub goal: SetupGoal,
     pub steps: Vec<(&'static str, StepState)>,
     pub finished: bool,
-    /// Re-apply runs: a snapshot of the written-state record, taken before
-    /// the component steps so their own writes can't water it down.
-    pub remembered: Option<crate::applied::Applied>,
+}
+
+/// Re-apply's closing steps, listed after the upgrades it re-installs.
+const SETTINGS_STEP: &str = "Your settings";
+const PATCHES_STEP: &str = "Exe patches";
+
+/// Whether "Re-apply" re-runs a setup component: only one Vault Patcher
+/// installed that has gone missing. Never something the user didn't
+/// install or removed, however recommended. Settings bundles and exe
+/// patches come back through the re-apply record instead (their values and
+/// patches are remembered when applied), and launch switches can't be
+/// rewritten behind our back.
+fn reapply_wants(kind: &ComponentKind, status: &Status, ours: bool) -> bool {
+    match kind {
+        ComponentKind::Settings { .. } | ComponentKind::ExePatch(_) | ComponentKind::LaunchArg(_) => false,
+        _ => ours && !status.is_active() && !matches!(status, Status::Blocked(_)),
+    }
+}
+
+/// The launch mode Play really uses: the picked one when it can work,
+/// else `Normal`. `Direct` needs a game with a launcher to skip; `Launcher`
+/// also needs the launcher's exe on disk (checked only then).
+fn usable_launch_mode(picked: Option<LaunchMode>, has_launcher: bool, launcher_found: impl FnOnce() -> bool) -> LaunchMode {
+    match picked {
+        Some(LaunchMode::Direct) if has_launcher => LaunchMode::Direct,
+        Some(LaunchMode::Launcher) if has_launcher && launcher_found() => LaunchMode::Launcher,
+        _ => LaunchMode::Normal,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,6 +213,8 @@ pub struct GameState {
     status_cache: std::cell::RefCell<HashMap<&'static str, Status>>,
     /// Last "is the game running" answer and when it was taken.
     running_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
+    /// The same, for the game's own launcher.
+    launcher_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
     /// Saved profiles, re-read when they change.
     pub profiles: Vec<crate::profiles::Entry>,
     /// What Vault Patcher last wrote, for "Re-apply" (see `applied.rs`).
@@ -210,6 +237,7 @@ impl GameState {
             setup_selected: def.setup.iter().filter(|c| c.recommended).map(|c| c.id).collect(),
             status_cache: Default::default(),
             running_cache: Default::default(),
+            launcher_cache: Default::default(),
             profiles: crate::profiles::list(def.id),
             applied: crate::applied::load(def.id),
         }
@@ -238,6 +266,45 @@ impl GameState {
     /// running watch polls off the UI thread), so `is_running` agrees.
     fn note_running(&self, running: bool) {
         self.running_cache.set(Some((std::time::Instant::now(), running)));
+    }
+
+    /// The game's own launcher program, when it has one and it's there.
+    pub fn launcher_path(&self) -> Option<PathBuf> {
+        let launcher = self.def.launcher?;
+        self.install.as_ref().map(|i| i.root.join(launcher.exe)).filter(|p| p.is_file())
+    }
+
+    /// True while the game's launcher is open: it pushes its own copy of
+    /// the video settings when it starts the game, undoing a save made
+    /// meanwhile.
+    pub fn launcher_running(&self) -> bool {
+        if let Some((at, running)) = self.launcher_cache.get()
+            && at.elapsed() < Duration::from_secs(2)
+        {
+            return running;
+        }
+        let running = self.launcher_path().is_some_and(|p| crate::compare::program_running(&p));
+        self.launcher_cache.set(Some((std::time::Instant::now(), running)));
+        running
+    }
+
+    /// Why the game's settings can't be written right now, if they can't:
+    /// the game or its launcher is open and would overwrite them.
+    pub fn write_blocker(&self) -> Option<String> {
+        if self.is_running() {
+            Some(format!("{} is running — close it first, or it will overwrite these settings when it exits", self.def.name))
+        } else if self.launcher_running() {
+            Some(format!("The {} launcher is open — close it first, or it will put its own video settings back", self.def.short))
+        } else {
+            None
+        }
+    }
+
+    /// Changes this game's re-apply record (see `applied.rs`) and saves it.
+    fn update_applied(&mut self, f: impl FnOnce(&mut crate::applied::Applied)) -> Result<()> {
+        let root = self.install.as_ref().map(|i| i.root.as_path());
+        self.applied = crate::applied::update(self.def.id, self.config_dir.as_deref(), root, f)?;
+        Ok(())
     }
 
     fn reload_profiles(&mut self) {
@@ -552,7 +619,8 @@ impl Workspace {
             }
         }
         game.backups = backup::list(def.id);
-        game.applied = crate::applied::load(def.id);
+        // A record made for another settings folder or install doesn't apply here.
+        game.applied = crate::applied::load(def.id).fit(game.config_dir.as_deref(), game.install.as_ref().map(|i| i.root.as_path()));
     }
 
     pub fn refresh_active(&mut self, cx: &mut Context<Self>) {
@@ -606,6 +674,15 @@ impl Workspace {
         let on_disk = game.current(tweak).unwrap_or_else(|| tweak.default.to_value());
         if value == on_disk {
             game.pending.remove(tweak.id);
+            // Nothing to write, but picking what's on disk over the value
+            // Vault Patcher remembered accepts it: no more drift warning,
+            // and Re-apply won't put the old value back.
+            if game.current(tweak).as_ref() == Some(&value)
+                && game.applied.differs(tweak, &value)
+                && let Err(e) = game.update_applied(|a| a.merge(&[(tweak.id, Some(value))]))
+            {
+                self.toast(ToastKind::Error, format!("{e:#}"), cx);
+            }
         } else {
             game.pending.insert(tweak.id, value);
         }
@@ -682,7 +759,7 @@ impl Workspace {
             }
         });
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 // A burst of Quick Settings saves undoes back to before the burst.
                 match &mut self.undo {
                     Some(undo) if coalesce && undo.game == gi => {
@@ -717,7 +794,7 @@ impl Workspace {
             }
         });
         match result {
-            Ok(()) => self.toast(ToastKind::Info, format!("Undone: {} setting(s) put back", undo.values.len()), cx),
+            Ok(_) => self.toast(ToastKind::Info, format!("Undone: {} setting(s) put back", undo.values.len()), cx),
             Err(e) => self.toast(ToastKind::Error, format!("Couldn't undo: {e:#}"), cx),
         }
     }
@@ -876,7 +953,8 @@ impl Workspace {
     /// reverted), keeping a permanent "original settings" snapshot, and
     /// snapshotting the files about to change. With `coalesce`, one snapshot
     /// covers a burst of Quick Settings edits instead of one per edit.
-    fn write_configs(&mut self, gi: usize, label: &str, coalesce: bool, edit: impl FnOnce(&mut ConfigSet)) -> Result<()> {
+    /// Returns how many settings the write changed.
+    fn write_configs(&mut self, gi: usize, label: &str, coalesce: bool, edit: impl FnOnce(&mut ConfigSet)) -> Result<usize> {
         let lock = self.settings.lock_configs_after_apply;
         let max_backups = self.settings.max_backups;
         let game = &mut self.games[gi];
@@ -886,11 +964,8 @@ impl Workspace {
                 "config files not found — launch the game once or set the folder in App Settings"
             ));
         };
-        if game.is_running() {
-            return Err(anyhow!(
-                "{} is running — close it first, or it will overwrite these settings when it exits",
-                def.name
-            ));
+        if let Some(reason) = game.write_blocker() {
+            return Err(anyhow!(reason));
         }
         let mut config = ConfigSet::load(&dir, def.ini_files);
         let existing: Vec<PathBuf> = config.files().filter(|(_, f)| f.exists).map(|(_, f)| f.path.clone()).collect();
@@ -901,21 +976,22 @@ impl Workspace {
         // which values this write actually changed — those are remembered
         // for "Re-apply".
         let before: Vec<Option<Value>> = def.visible_tweaks().map(|t| t.read(&config)).collect();
+        let changes = |config: &ConfigSet| -> Vec<(&'static str, Option<Value>)> {
+            def.visible_tweaks()
+                .zip(before.iter())
+                .filter_map(|(t, was)| {
+                    let now = t.read(config);
+                    (now != *was).then_some((t.id, now))
+                })
+                .collect()
+        };
         edit(&mut config);
-        let changed: Vec<(&'static str, Option<Value>)> = def
-            .visible_tweaks()
-            .zip(before.iter())
-            .filter_map(|(t, was)| {
-                let now = t.read(&config);
-                (now != *was).then_some((t.id, now))
-            })
-            .collect();
         let dirty = config.dirty_paths();
         if dirty.is_empty() {
+            let changed = changes(&config);
             game.config = config;
-            crate::applied::record(def.id, &changed);
-            game.applied = crate::applied::load(def.id);
-            return Ok(());
+            game.update_applied(|a| a.merge(&changed))?;
+            return Ok(changed.len());
         }
         let recent = game.backups.first().is_some_and(|b| {
             b.label == label
@@ -930,9 +1006,12 @@ impl Workspace {
         game.config = ConfigSet::load(&dir, def.ini_files);
         game.invalidate_statuses();
         game.backups = backup::list(def.id);
+        // Remember what actually landed on disk — even when only some of
+        // the files could be written.
+        let changed = changes(&game.config);
+        let recorded = game.update_applied(|a| a.merge(&changed));
         let written = written?;
-        crate::applied::record(def.id, &changed);
-        game.applied = crate::applied::load(def.id);
+        recorded?;
         if lock {
             for path in &written {
                 backup::set_readonly(path, true)?;
@@ -940,7 +1019,7 @@ impl Workspace {
         }
         prune_backups(def.id, max_backups);
         game.backups = backup::list(def.id);
-        Ok(())
+        Ok(changed.len())
     }
 
     /// Simple mode: stage a change and write it shortly after the user stops
@@ -1166,55 +1245,63 @@ impl Workspace {
         let launch_args = self.launch_args();
         let wanted = |c: &setup::Component| {
             let status = self.component_status(c);
+            let ours = setup::installed_by_us(c, game, &launch_args);
             match goal {
-                // Only undo what Vault Patcher itself installed or applied.
-                SetupGoal::Uninstall => setup::installed_by_us(c, game, &launch_args),
+                // Only undo what Vault Patcher itself installed or applied
+                // (an exe patch only while it's actually on).
+                SetupGoal::Uninstall => ours && (!matches!(c.kind, ComponentKind::ExePatch(_)) || status.is_active()),
                 SetupGoal::Install => {
                     game.setup_selected.contains(c.id) && !status.is_active() && !matches!(status, Status::Blocked(_))
                 }
-                SetupGoal::Reapply => match c.kind {
-                    // "Installed" goes stale behind our back (the game's
-                    // launcher rewrites its copy of the video keys), so a
-                    // settings bundle is re-written whenever it's still
-                    // supposed to be applied.
-                    ComponentKind::Settings { .. } => {
-                        !matches!(status, Status::Blocked(_))
-                            && (status.is_active() || setup::installed_by_us(c, game, &launch_args))
-                    }
-                    _ => {
-                        !status.is_active()
-                            && !matches!(status, Status::Blocked(_))
-                            && (game.setup_selected.contains(c.id) || setup::installed_by_us(c, game, &launch_args))
-                    }
-                },
+                SetupGoal::Reapply => reapply_wants(&c.kind, &status, ours),
             }
         };
+        let active = |id: &str| def.component(id).is_some_and(|d| self.component_status(d).is_active());
         let mut ids: Vec<&'static str> = def.setup.iter().filter(|c| wanted(c)).map(|c| c.id).collect();
-        if goal != SetupGoal::Uninstall {
-            // Pull in dependencies that aren't installed yet (e.g. the SDK
-            // for SDK mods), keeping list order.
-            let needed: Vec<&'static str> = ids
-                .iter()
-                .filter_map(|id| def.component(id))
-                .flat_map(|c| c.requires.iter().copied())
-                .filter(|dep| !ids.contains(dep))
-                .filter(|dep| def.component(dep).is_some_and(|d| !self.component_status(d).is_active()))
-                .collect();
-            if !needed.is_empty() {
-                ids = def
-                    .setup
+        match goal {
+            SetupGoal::Install => {
+                // Pull in dependencies that aren't installed yet (e.g. the SDK
+                // for SDK mods), keeping list order.
+                let needed: Vec<&'static str> = ids
                     .iter()
-                    .map(|c| c.id)
-                    .filter(|id| ids.contains(id) || needed.contains(id))
+                    .filter_map(|id| def.component(id))
+                    .flat_map(|c| c.requires.iter().copied())
+                    .filter(|dep| !ids.contains(dep) && !active(dep))
                     .collect();
+                if !needed.is_empty() {
+                    ids = def
+                        .setup
+                        .iter()
+                        .map(|c| c.id)
+                        .filter(|id| ids.contains(id) || needed.contains(id))
+                        .collect();
+                }
+            }
+            // "Put back" never installs anything new: a component whose
+            // dependency the user removed is left alone.
+            SetupGoal::Reapply => {
+                let keep: Vec<&'static str> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| def.component(id).is_none_or(|c| c.requires.iter().all(|dep| ids.contains(dep) || active(dep))))
+                    .collect();
+                ids = keep;
+            }
+            // Remove dependents (SDK mods) before what they depend on.
+            SetupGoal::Uninstall => ids.reverse(),
+        }
+        // Re-apply ends by writing back the remembered settings and exe
+        // patches; each gets a line in the step list.
+        let mut steps: Vec<&'static str> = ids.clone();
+        if goal == SetupGoal::Reapply {
+            if !game.applied.values.is_empty() {
+                steps.push(SETTINGS_STEP);
+            }
+            if !game.applied.patches.is_empty() {
+                steps.push(PATCHES_STEP);
             }
         }
-        if goal == SetupGoal::Uninstall {
-            // Remove dependents (SDK mods) before what they depend on.
-            ids.reverse();
-        }
-        let remembered = (goal == SetupGoal::Reapply).then(|| game.applied.clone());
-        if ids.is_empty() && remembered.as_ref().is_none_or(|a| a.is_empty()) {
+        if steps.is_empty() {
             self.toast(
                 ToastKind::Info,
                 match goal {
@@ -1231,9 +1318,8 @@ impl Workspace {
         let uninstall = goal == SetupGoal::Uninstall;
         self.setup_run = Some(SetupRun {
             goal,
-            steps: ids.iter().map(|id| (*id, StepState::Queued)).collect(),
+            steps: steps.iter().map(|id| (*id, StepState::Queued)).collect(),
             finished: false,
-            remembered,
         });
         cx.notify();
 
@@ -1277,19 +1363,18 @@ impl Workspace {
                 .ok();
             }
             this.update(cx, |ws, cx| {
+                // With the components back in place, re-write the remembered
+                // settings and re-patch the exe.
+                let (settings, patched) = ws.rewrite_remembered(game_index, cx);
                 let failed = ws.setup_run.as_ref().map_or(0, |r| {
                     r.steps.iter().filter(|(_, s)| matches!(s, StepState::Failed(_))).count()
                 });
                 let done = ws.setup_run.as_ref().map_or(0, |r| {
-                    r.steps.iter().filter(|(_, s)| matches!(s, StepState::Done(_))).count()
+                    r.steps
+                        .iter()
+                        .filter(|(id, s)| matches!(s, StepState::Done(_)) && ![SETTINGS_STEP, PATCHES_STEP].contains(id))
+                        .count()
                 });
-                // With the components back in place, re-write the remembered
-                // settings and re-patch the exe.
-                let remembered = ws.setup_run.as_mut().and_then(|r| r.remembered.take());
-                let (settings, patched) = remembered
-                    .as_ref()
-                    .map(|a| ws.rewrite_remembered(game_index, a, cx))
-                    .unwrap_or((0, 0));
                 if let Some(run) = &mut ws.setup_run {
                     run.finished = true;
                 }
@@ -1354,9 +1439,8 @@ impl Workspace {
             self.toast(ToastKind::Info, "Already working — wait for it to finish", cx);
             return;
         }
-        if self.game().is_running() {
-            let name = self.game().def.name;
-            self.toast(ToastKind::Error, format!("{name} is running — close it first"), cx);
+        if let Some(reason) = self.game().write_blocker() {
+            self.toast(ToastKind::Error, reason, cx);
             return;
         }
         if !self.game().config_found() && self.game().install.is_none() {
@@ -1370,53 +1454,106 @@ impl Workspace {
         self.run_setup(SetupGoal::Reapply, cx);
     }
 
+    /// Runs a health check's button.
+    pub fn health_fix(&mut self, fix: crate::health::Fix, cx: &mut Context<Self>) {
+        match fix {
+            crate::health::Fix::Go(page) => self.navigate(page, cx),
+            crate::health::Fix::Reapply => self.reapply_all(cx),
+            crate::health::Fix::KeepCurrent => self.keep_current(cx),
+        }
+    }
+
+    /// The user changed things outside Vault Patcher on purpose: what's on
+    /// disk now becomes what Re-apply puts back, for everything it already
+    /// remembers (settings and exe patches alike).
+    pub fn keep_current(&mut self, cx: &mut Context<Self>) {
+        self.refresh_game(self.active);
+        let game = self.game_mut();
+        let (def, config, found) = (game.def, game.config.clone(), game.config_found());
+        let states = game.exe.as_ref().map(|e| e.patch_states.clone()).unwrap_or_default();
+        let recorded = game.update_applied(|a| {
+            if found {
+                a.sync_values(def, &config);
+            }
+            a.sync_patches(&states);
+        });
+        match recorded {
+            Ok(()) => self.toast(ToastKind::Success, "Kept — Re-apply will leave these as they are", cx),
+            Err(e) => self.toast(ToastKind::Error, format!("{e:#}"), cx),
+        }
+    }
+
     /// End of a re-apply run: writes the remembered setting values back and
-    /// re-patches any remembered exe patch that was reverted. Returns the
-    /// (settings, patches) counts; failures toast on their own.
-    fn rewrite_remembered(&mut self, gi: usize, applied: &crate::applied::Applied, cx: &mut Context<Self>) -> (usize, usize) {
-        let def = self.games[gi].def;
+    /// re-patches any remembered exe patch that was reverted, updating their
+    /// lines in the step list. The record is read now, not when the run
+    /// started, so a change made meanwhile isn't undone. Returns how many
+    /// (settings, patches) actually changed.
+    fn rewrite_remembered(&mut self, gi: usize, cx: &mut Context<Self>) -> (usize, usize) {
+        let applied = self.games[gi].applied.clone();
+        let has_step = |ws: &Self, id| ws.setup_run.as_ref().is_some_and(|r| r.steps.iter().any(|(s, _)| *s == id));
         let mut settings = 0;
-        let writes = crate::applied::resolve(def, applied);
-        if !writes.is_empty() {
-            match self.write_configs(gi, "Before re-applying settings", false, |config| {
+        if has_step(self, SETTINGS_STEP) {
+            let writes = crate::applied::resolve(self.games[gi].def, &applied);
+            let state = match self.write_configs(gi, "Before re-applying settings", false, |config| {
                 for (tweak, value) in &writes {
                     tweak.write(config, value);
                 }
             }) {
-                Ok(()) => settings = writes.len(),
-                Err(e) => self.toast(ToastKind::Error, format!("Couldn't re-apply settings: {e:#}"), cx),
-            }
+                Ok(0) => StepState::Done("Already in place".into()),
+                Ok(n) => {
+                    settings = n;
+                    StepState::Done(format!("{n} put back"))
+                }
+                Err(e) => StepState::Failed(format!("{e:#}")),
+            };
+            self.set_step_named(SETTINGS_STEP, state, cx);
         }
         let mut patched = 0;
-        if !applied.patches.is_empty()
-            && let Some(path) = self.games[gi].exe_path().filter(|p| p.is_file())
-        {
-            match patches::read_exe(&path) {
-                Ok(mut bytes) => {
-                    for id in &applied.patches {
-                        if let Some(p) = def.patches.iter().find(|p| p.id == id.as_str())
-                            && p.state(&bytes) == PatchState::Unpatched
-                            && p.set(&mut bytes, true).is_ok()
-                        {
-                            patched += 1;
-                        }
-                    }
-                    if patched > 0 {
-                        let written = backup::create(def.id, "Before re-applying exe patches", std::slice::from_ref(&path))
-                            .and_then(|_| {
-                                backup::clear_readonly(&path);
-                                std::fs::write(&path, &bytes).map_err(Into::into)
-                            });
-                        if let Err(e) = written {
-                            self.toast(ToastKind::Error, format!("Couldn't re-apply exe patches: {e:#}"), cx);
-                            patched = 0;
-                        }
-                    }
+        if has_step(self, PATCHES_STEP) {
+            let state = match self.repatch(gi, &applied.patches) {
+                Ok(0) => StepState::Done("Already applied".into()),
+                Ok(n) => {
+                    patched = n;
+                    StepState::Done(format!("{n} re-patched"))
                 }
-                Err(e) => self.toast(ToastKind::Error, format!("Couldn't read the exe for re-patching: {e:#}"), cx),
-            }
+                Err(e) => StepState::Failed(format!("{e:#}")),
+            };
+            self.set_step_named(PATCHES_STEP, state, cx);
         }
         (settings, patched)
+    }
+
+    fn set_step_named(&mut self, id: &str, state: StepState, cx: &mut Context<Self>) {
+        if let Some(step) = self.setup_run.as_ref().and_then(|r| r.steps.iter().position(|(s, _)| *s == id)) {
+            self.set_step(step, state, cx);
+        }
+    }
+
+    /// Re-applies the remembered exe patches that were reverted. Returns how
+    /// many it patched.
+    fn repatch(&mut self, gi: usize, remembered: &BTreeSet<String>) -> Result<usize> {
+        let game = &self.games[gi];
+        let def = game.def;
+        let path = game.exe_path().filter(|p| p.is_file()).context("game install not found")?;
+        if game.is_running() {
+            return Err(anyhow!("{} is running — close it first", def.name));
+        }
+        let mut bytes = patches::read_exe(&path).context("reading the exe")?;
+        let mut patched = 0;
+        for id in remembered {
+            if let Some(p) = def.patches.iter().find(|p| p.id == id.as_str())
+                && p.state(&bytes) == PatchState::Unpatched
+            {
+                p.set(&mut bytes, true)?;
+                patched += 1;
+            }
+        }
+        if patched > 0 {
+            backup::create(def.id, "Before re-applying exe patches", std::slice::from_ref(&path))?;
+            backup::clear_readonly(&path);
+            std::fs::write(&path, &bytes).with_context(|| format!("writing {} (is the game running?)", path.display()))?;
+        }
+        Ok(patched)
     }
 
     /// Begins one setup step. `None` means the step was already skipped.
@@ -1454,6 +1591,12 @@ impl Workspace {
                         hook(config, mode);
                     }
                 })?;
+                // Remember every value of the bundle — not only the ones that
+                // changed — so Re-apply can put any of them back.
+                let game = &mut self.games[gi];
+                let set: Vec<(&'static str, Option<Value>)> =
+                    values.iter().filter_map(|(id, _)| def.tweak(id)).map(|t| (t.id, game.current(t))).collect();
+                game.update_applied(|a| a.merge(&set))?;
                 setup::record_settings_applied(game_id, comp_id)?;
                 Job::Done(match (display, mode) {
                     (Some(_), Some(m)) => format!("Tuned for {}×{} @ {} Hz", m.width, m.height, m.refresh_hz),
@@ -1468,6 +1611,9 @@ impl Workspace {
                         }
                     }
                 })?;
+                // Removed on purpose: Re-apply mustn't bring these back.
+                let ids: Vec<&'static str> = values.iter().filter_map(|(id, _)| def.tweak(id)).map(|t| t.id).collect();
+                self.games[gi].update_applied(|a| a.forget(ids))?;
                 crate::core::manifest::remove(game_id, comp_id);
                 Job::Done("Back to game defaults".into())
             }
@@ -1483,7 +1629,7 @@ impl Workspace {
                 backup::clear_readonly(&path);
                 std::fs::write(&path, bytes)
                     .with_context(|| format!("writing {} (is the game running?)", path.display()))?;
-                crate::applied::set_patch(game_id, p.id, !uninstall);
+                self.games[gi].update_applied(|a| a.set_patch(p.id, !uninstall))?;
                 Job::Done(if uninstall { "Reverted" } else { "Patched" }.into())
             }
             (ComponentKind::LaunchArg(arg), remove) => {
@@ -1614,14 +1760,12 @@ impl Workspace {
         })();
         match result {
             Ok(()) => {
-                let game_id = self.game().def.id;
-                crate::applied::set_patch(game_id, patch_id, enabled);
+                let recorded = self.game_mut().update_applied(|a| a.set_patch(patch_id, enabled));
                 self.refresh_active(cx);
-                self.toast(
-                    ToastKind::Success,
-                    if enabled { "Patch applied" } else { "Patch reverted" },
-                    cx,
-                );
+                match recorded {
+                    Ok(()) => self.toast(ToastKind::Success, if enabled { "Patch applied" } else { "Patch reverted" }, cx),
+                    Err(e) => self.toast(ToastKind::Error, format!("{e:#}"), cx),
+                }
             }
             Err(e) => self.toast(ToastKind::Error, format!("{e:#}"), cx),
         }
@@ -1653,9 +1797,8 @@ impl Workspace {
             self.toast(ToastKind::Error, "That backup no longer exists", cx);
             return;
         };
-        if self.game().is_running() {
-            let name = self.game().def.name;
-            self.toast(ToastKind::Error, format!("{name} is running — close it first"), cx);
+        if let Some(reason) = self.game().write_blocker() {
+            self.toast(ToastKind::Error, reason, cx);
             return;
         }
         let current: Vec<PathBuf> = b.files.iter().map(|f| f.original.clone()).collect();
@@ -1666,15 +1809,26 @@ impl Workspace {
             Ok(()) => {
                 self.refresh_active(cx);
                 // The restored files are the new intent, so the re-apply
-                // record is rebuilt from them rather than resurrecting what
-                // the restore replaced.
-                let id = self.game().def.id;
-                {
-                    let game = self.game();
-                    crate::applied::sync_current(id, game.def, &game.config);
+                // record takes their values (for the settings it already
+                // remembers) and drops exe patches a restored exe undid,
+                // rather than resurrecting what the restore replaced.
+                let game = self.game_mut();
+                let exe = game.exe_path().map(|p| crate::compare::normalize_path(&p));
+                let exe_restored = b.files.iter().any(|f| Some(crate::compare::normalize_path(&f.original)) == exe);
+                let (def, config, found) = (game.def, game.config.clone(), game.config_found());
+                let states = game.exe.as_ref().map(|e| e.patch_states.clone()).unwrap_or_default();
+                let recorded = game.update_applied(|a| {
+                    if found {
+                        a.sync_values(def, &config);
+                    }
+                    if exe_restored {
+                        a.sync_patches(&states);
+                    }
+                });
+                match recorded {
+                    Ok(()) => self.toast(ToastKind::Success, format!("Restored \"{}\"", b.label), cx),
+                    Err(e) => self.toast(ToastKind::Error, format!("Restored \"{}\", but {e:#}", b.label), cx),
                 }
-                self.game_mut().applied = crate::applied::load(id);
-                self.toast(ToastKind::Success, format!("Restored \"{}\"", b.label), cx);
             }
             Err(e) => self.toast(ToastKind::Error, format!("Restore failed: {e:#}"), cx),
         }
@@ -1827,15 +1981,12 @@ impl Workspace {
     }
 
     /// How the Play button launches the current game — the mode last picked
-    /// in its dropdown, falling back to `Normal` for games with no launcher.
+    /// in its dropdown, falling back to `Normal` when it can't be used (no
+    /// launcher for this game, or its exe isn't there).
     pub fn launch_mode(&self) -> LaunchMode {
         let game = self.game();
-        let mode = self.settings.launch_mode.get(game.def.id).copied().unwrap_or(LaunchMode::Normal);
-        match mode {
-            LaunchMode::Normal => LaunchMode::Normal,
-            _ if game.def.launcher.is_some() => mode,
-            _ => LaunchMode::Normal,
-        }
+        let picked = self.settings.launch_mode.get(game.def.id).copied();
+        usable_launch_mode(picked, game.def.launcher.is_some(), || game.launcher_path().is_some())
     }
 
     /// Remembers `mode` as the Play button's way of starting this game.
@@ -1857,6 +2008,11 @@ impl Workspace {
     }
 
     pub fn launch(&mut self, mode: LaunchMode, cx: &mut Context<Self>) {
+        // The game would lock the files a setup run is writing.
+        if self.setup_running() {
+            self.toast(ToastKind::Info, "Still working — wait for it to finish, then play", cx);
+            return;
+        }
         let def = self.game().def;
         let (exe, args) = match mode {
             LaunchMode::Launcher => {
@@ -2203,6 +2359,57 @@ fn run_audio(background: bool, settings: &AppSettings) -> (bool, bool) {
     }
 }
 
+/// Label shared by Quick Settings saves, so a burst of edits shares one backup.
+const QUICK_LABEL: &str = "Before Quick Settings changes";
+
+/// Patch states for an exe, cached by size and modification time so the
+/// multi-megabyte scan only runs when the exe actually changed.
+fn scan_exe(def: &GameDef, path: &std::path::Path) -> ExeInfo {
+    use std::sync::Mutex;
+    type Key = (PathBuf, u64, Option<std::time::SystemTime>);
+    static CACHE: Mutex<Vec<(Key, ExeInfo)>> = Mutex::new(Vec::new());
+    let meta = std::fs::metadata(path).ok();
+    let key: Key = (
+        path.to_path_buf(),
+        meta.as_ref().map_or(0, |m| m.len()),
+        meta.and_then(|m| m.modified().ok()),
+    );
+    if let Some((_, info)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+        return info.clone();
+    }
+    let bytes = patches::read_exe(path).unwrap_or_default();
+    let info = ExeInfo {
+        size: bytes.len() as u64,
+        patch_states: def.patches.iter().map(|p| (p.id, p.state(&bytes))).collect(),
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|(k, _)| k.0 != key.0);
+    cache.push((key, info.clone()));
+    info
+}
+
+/// Work for one setup step.
+enum Job {
+    Done(String),
+    Background(Box<dyn FnOnce() -> Result<String> + Send>),
+}
+
+/// Keeps the newest `max` config-only snapshots. Snapshots holding anything
+/// else (the game exe, mod manager files) and the original-settings snapshot
+/// are never pruned automatically.
+fn prune_backups(game_id: &str, max: Option<usize>) {
+    let max = max.unwrap_or(30);
+    let config_only = |b: &Backup| {
+        b.files
+            .iter()
+            .all(|f| f.original.extension().is_some_and(|e| e.eq_ignore_ascii_case("ini")))
+    };
+    let prunable = |b: &Backup| config_only(b) && b.label != backup::ORIGINAL_LABEL;
+    for old in backup::list(game_id).into_iter().filter(prunable).skip(max) {
+        let _ = backup::delete(&old);
+    }
+}
+
 #[cfg(test)]
 mod run_watch_tests {
     use super::*;
@@ -2288,55 +2495,37 @@ mod run_watch_tests {
         assert_eq!(run_audio(false, &s), (true, false));
         assert_eq!(run_audio(true, &s), (true, false));
     }
-}
 
-/// Label shared by Quick Settings saves, so a burst of edits shares one backup.
-const QUICK_LABEL: &str = "Before Quick Settings changes";
-
-/// Patch states for an exe, cached by size and modification time so the
-/// multi-megabyte scan only runs when the exe actually changed.
-fn scan_exe(def: &GameDef, path: &std::path::Path) -> ExeInfo {
-    use std::sync::Mutex;
-    type Key = (PathBuf, u64, Option<std::time::SystemTime>);
-    static CACHE: Mutex<Vec<(Key, ExeInfo)>> = Mutex::new(Vec::new());
-    let meta = std::fs::metadata(path).ok();
-    let key: Key = (
-        path.to_path_buf(),
-        meta.as_ref().map_or(0, |m| m.len()),
-        meta.and_then(|m| m.modified().ok()),
-    );
-    if let Some((_, info)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
-        return info.clone();
+    #[test]
+    fn reapply_only_restores_what_we_installed() {
+        let bl2 = &crate::games::bl2::GAME;
+        let kind = |id| bl2.component(id).unwrap().kind;
+        let missing = Status::Missing;
+        let active = Status::Active(None);
+        // Recommended but never installed (or removed with Restore vanilla).
+        assert!(!reapply_wants(&kind("dxvk"), &missing, false));
+        assert!(!reapply_wants(&kind("sdk"), &missing, false));
+        // Installed by us and gone missing: put back.
+        assert!(reapply_wants(&kind("dxvk"), &missing, true));
+        assert!(!reapply_wants(&kind("dxvk"), &active, true));
+        assert!(!reapply_wants(&kind("dxvk"), &Status::Blocked("no".into()), true));
+        // Exe patches and settings come back through the record instead.
+        assert!(!reapply_wants(&kind("laa"), &missing, true));
+        for c in bl2.setup {
+            if matches!(c.kind, ComponentKind::Settings { .. } | ComponentKind::LaunchArg(_)) {
+                assert!(!reapply_wants(&c.kind, &missing, true), "{}", c.id);
+            }
+        }
     }
-    let bytes = patches::read_exe(path).unwrap_or_default();
-    let info = ExeInfo {
-        size: bytes.len() as u64,
-        patch_states: def.patches.iter().map(|p| (p.id, p.state(&bytes))).collect(),
-    };
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.retain(|(k, _)| k.0 != key.0);
-    cache.push((key, info.clone()));
-    info
-}
 
-/// Work for one setup step.
-enum Job {
-    Done(String),
-    Background(Box<dyn FnOnce() -> Result<String> + Send>),
-}
-
-/// Keeps the newest `max` config-only snapshots. Snapshots holding anything
-/// else (the game exe, mod manager files) and the original-settings snapshot
-/// are never pruned automatically.
-fn prune_backups(game_id: &str, max: Option<usize>) {
-    let max = max.unwrap_or(30);
-    let config_only = |b: &Backup| {
-        b.files
-            .iter()
-            .all(|f| f.original.extension().is_some_and(|e| e.eq_ignore_ascii_case("ini")))
-    };
-    let prunable = |b: &Backup| config_only(b) && b.label != backup::ORIGINAL_LABEL;
-    for old in backup::list(game_id).into_iter().filter(prunable).skip(max) {
-        let _ = backup::delete(&old);
+    #[test]
+    fn launch_mode_falls_back_when_it_cant_work() {
+        use LaunchMode::*;
+        assert_eq!(usable_launch_mode(None, true, || true), Normal);
+        assert_eq!(usable_launch_mode(Some(Direct), true, || false), Direct);
+        assert_eq!(usable_launch_mode(Some(Launcher), true, || true), Launcher);
+        assert_eq!(usable_launch_mode(Some(Launcher), true, || false), Normal, "launcher exe missing");
+        assert_eq!(usable_launch_mode(Some(Launcher), false, || true), Normal, "game has no launcher");
+        assert_eq!(usable_launch_mode(Some(Direct), false, || true), Normal);
     }
 }

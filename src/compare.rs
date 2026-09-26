@@ -435,6 +435,60 @@ pub(crate) fn game_running(_exe: &Path) -> bool {
     false
 }
 
+/// Whether the program at exactly `exe` is running. Unlike `game_running`
+/// this checks the full path, for generic names like `Launcher.exe` that
+/// other apps use too. A process whose path can't be read doesn't count.
+#[cfg(windows)]
+pub(crate) fn program_running(exe: &Path) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
+    };
+    let Some(name) = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    let want = normalize_path(exe);
+    let utf16 = |s: &[u16]| String::from_utf16_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]);
+    // SAFETY: standard snapshot walks; every handle is closed before returning.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        let mut ok = Process32FirstW(snap, &mut entry) != 0;
+        while ok && !found {
+            if utf16(&entry.szExeFile).to_lowercase() == name {
+                // A process's first module is its exe, with the full path.
+                let modules = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, entry.th32ProcessID);
+                if modules != INVALID_HANDLE_VALUE {
+                    let mut module: MODULEENTRY32W = std::mem::zeroed();
+                    module.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
+                    found = Module32FirstW(modules, &mut module) != 0
+                        && normalize_path(Path::new(&utf16(&module.szExePath))) == want;
+                    CloseHandle(modules);
+                }
+            }
+            ok = Process32NextW(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+        found
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn program_running(_exe: &Path) -> bool {
+    false
+}
+
+/// A path in the form Windows compares it: case-insensitive, either slash.
+pub(crate) fn normalize_path(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
 pub(crate) fn kill_game(exe: &Path) {
     if let Some(name) = exe.file_name() {
         let _ = Command::new("taskkill").args(["/IM", &name.to_string_lossy(), "/F"]).output();
@@ -652,9 +706,18 @@ pub fn download_pack(game_id: &str) -> Result<usize> {
 }
 
 /// Copies a game's bundled images into `comparisons_dir()`, writing only
-/// files that are missing or the wrong size. Returns how many were written;
-/// zero for games with no bundled set.
+/// files that are missing — an image already there may be the user's own
+/// re-shot capture, which always wins. Returns how many were written; zero
+/// for games with no bundled set.
 pub fn extract_pack(game_id: &str) -> usize {
+    let written = extract_pack_to(game_id, &comparisons_dir().join(game_id));
+    if written > 0 {
+        invalidate_images();
+    }
+    written
+}
+
+fn extract_pack_to(game_id: &str, dest: &Path) -> usize {
     let prefix = format!("{game_id}/");
     let mut written = 0;
     for path in ComparisonImages::iter() {
@@ -664,16 +727,13 @@ pub fn extract_pack(game_id: &str) -> usize {
             continue;
         }
         let Some(file) = ComparisonImages::get(path.as_ref()) else { continue };
-        let out = comparisons_dir().join(game_id).join(parts[0]).join(parts[1]);
-        if out.metadata().is_ok_and(|m| m.len() == file.data.len() as u64) {
+        let out = dest.join(parts[0]).join(parts[1]);
+        if out.exists() {
             continue;
         }
         if fs::create_dir_all(out.parent().expect("has parent")).is_ok() && fs::write(&out, &file.data).is_ok() {
             written += 1;
         }
-    }
-    if written > 0 {
-        invalidate_images();
     }
     written
 }
@@ -780,6 +840,35 @@ mod tests {
             assert_eq!(parts.len(), 3, "{f}");
             assert!(is_pack_entry(&parts[1..]), "{f}");
         }
+    }
+
+    #[test]
+    fn bundled_images_never_replace_user_captures() {
+        let dest = std::env::temp_dir().join("vaultpatcher-extract-test");
+        let _ = fs::remove_dir_all(&dest);
+        let total = extract_pack_to("bl2", &dest);
+        assert!(total > 0);
+        assert_eq!(extract_pack_to("bl2", &dest), 0, "nothing missing, nothing written");
+        // The user re-shoots one image and another goes missing.
+        let mut shots = fs::read_dir(&dest).unwrap().flatten().flat_map(|d| fs::read_dir(d.path()).unwrap().flatten());
+        let (mine, gone) = (shots.next().unwrap().path(), shots.next().unwrap().path());
+        fs::write(&mine, b"my capture").unwrap();
+        fs::remove_file(&gone).unwrap();
+        assert_eq!(extract_pack_to("bl2", &dest), 1);
+        assert_eq!(fs::read(&mine).unwrap(), b"my capture");
+        assert!(gone.is_file());
+        assert_eq!(extract_pack_to("bl1e", &dest.join("none")), 0, "no bundled set");
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn program_check_needs_the_exact_path() {
+        let me = std::env::current_exe().unwrap();
+        assert!(program_running(&me) || !cfg!(windows));
+        let upper = PathBuf::from(me.to_string_lossy().to_uppercase());
+        assert!(program_running(&upper) || !cfg!(windows), "paths compare case-insensitively");
+        let elsewhere = std::env::temp_dir().join(me.file_name().unwrap());
+        assert!(!program_running(&elsewhere), "same name in another folder isn't it");
     }
 
     #[test]

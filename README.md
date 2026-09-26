@@ -42,8 +42,9 @@ Toggle between modes from the title bar.
 
 Settings that Nvidia's tweak guide covers link to its interactive comparison pages. Those
 pages are linked, never bundled, because Nvidia's terms don't allow redistribution. Our own
-images are captured by the maintainers and ship inside the app as embedded assets — nothing
-is downloaded on first run. Anyone can re-shoot them from
+images are captured by the maintainers. Borderlands 2's set ships inside the app as embedded
+assets, so nothing is downloaded for it; other games fetch their set once it's published.
+Your own re-shot images are never replaced. Anyone can re-shoot them from
 **App Settings → Tools → Comparison Capture**, which runs these steps on their own PC:
 
 1. Writes each option of a setting.
@@ -98,8 +99,8 @@ closes).
   button sounds from the game's launcher audio files (nothing is bundled).
 - **Window controls**: a custom-drawn title bar replaces the OS one — minimize, maximize
   and close are handled by the app itself.
-- **Bundled comparison images**: our own per-setting screenshots are embedded in the exe,
-  so there's no first-run download (see *Comparison images* above).
+- **Bundled comparison images**: our own Borderlands 2 screenshots are embedded in the exe,
+  so there's no first-run download for them (see *Comparison images* above).
 - **Updates and support**: checks for a newer Vault Patcher and mod SDK at startup, and
   *Copy diagnostics* puts a bug-report summary on the clipboard.
 - **Detection** of Steam libraries, Epic Games installs, and `Documents\My Games` config

@@ -68,11 +68,11 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             Level::Info => (Icon::Info, theme::echo()),
             Level::Ok => (Icon::CheckCircle, theme::success()),
         };
-        let fix = check.fix.map(|(label, page)| {
+        let fix = check.fixes.iter().enumerate().map(|(j, &(label, fix))| {
             let ws = ws.clone();
-            ui::button(SharedString::from(format!("fix-{i}")), label, None, Variant::Secondary)
+            ui::button(SharedString::from(format!("fix-{i}-{j}")), label, None, Variant::Secondary)
                 .h(px(28.))
-                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.navigate(page, cx)))
+                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.health_fix(fix, cx)))
         });
         health = health.when(i > 0, |d| d.child(ui::divider())).child(
             div()
