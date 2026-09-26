@@ -153,7 +153,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
 
     // ---- updates & diagnostics
     let app_update = state.updates.app.clone();
-    let sdk_line = match (&game.sdk, state.updates.sdk.as_deref()) {
+    let sdk_line = match (&game.sdk, state.latest_sdk()) {
         (SdkStatus::Installed(v), Some(latest)) if v != latest => format!("Mod SDK {v} installed; {latest} is available (Mods page)."),
         (SdkStatus::Installed(v), _) => format!("Mod SDK {v} installed and up to date."),
         (_, Some(latest)) => format!("Latest mod SDK: {latest}."),

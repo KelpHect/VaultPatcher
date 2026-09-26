@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use super::Key;
-use crate::core::backup;
 use crate::core::ini::IniDoc;
 
 #[derive(Clone)]
@@ -126,17 +125,9 @@ impl ConfigSet {
         }
         let mut written = Vec::new();
         for file in self.files.values_mut().filter(|f| f.dirty) {
-            let was_locked = backup::is_readonly(&file.path);
-            backup::clear_readonly(&file.path);
-            if let Some(parent) = file.path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let saved = file.doc.save(&file.path);
-            // Put a lifted lock back even if the write failed.
-            if was_locked {
-                backup::set_readonly(&file.path, true)?;
-            }
-            saved?;
+            // Replaced whole (never left half-written); a read-only lock is
+            // lifted for the swap and put back, even if it fails.
+            file.doc.save(&file.path)?;
             file.dirty = false;
             file.exists = true;
             written.push(file.path.clone());
@@ -164,6 +155,24 @@ mod tests {
         assert!(set.save_dirty().is_err(), "must refuse to write when a target couldn't be read");
         assert_eq!(std::fs::read_to_string(dir.join("Good.ini")).unwrap(), "[A]\r\nB=1\r\n", "nothing written at all");
         assert!(dir.join("Locked.ini").is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_a_locked_file_keeps_the_lock() {
+        use crate::core::backup;
+        let dir = std::env::temp_dir().join("vaultpatcher-config-lock");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Engine.ini");
+        std::fs::write(&path, "[A]\r\nB = 1\r\nC=2\r\n").unwrap();
+        backup::set_readonly(&path, true).unwrap();
+        let mut set = ConfigSet::load(&dir, &[("e", "Engine.ini")]);
+        set.set(&Key { file: "e", section: "A", key: "C" }, "3");
+        assert_eq!(set.save_dirty().unwrap(), vec![path.clone()]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[A]\r\nB = 1\r\nC=3\r\n");
+        assert!(backup::is_readonly(&path));
+        backup::clear_readonly(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -54,12 +54,15 @@ impl AppSettings {
             .unwrap_or_default()
     }
 
+    /// Saves via a temp file and a rename, so a torn write can't reset every
+    /// setting to its default on the next start.
     pub fn save(&self) {
-        let path = Self::path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let saved = serde_json::to_vec_pretty(self)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| crate::core::atomic::write(&Self::path(), &bytes));
+        if let Err(e) = saved {
+            eprintln!("couldn't save app settings: {e:#}");
         }
-        let _ = std::fs::write(path, serde_json::to_vec_pretty(self).unwrap_or_default());
     }
 }
 
@@ -184,8 +187,8 @@ pub struct Undo {
 pub struct Updates {
     /// (tag, release page) of a newer Vault Patcher.
     pub app: Option<(String, String)>,
-    /// Latest mod SDK release tag.
-    pub sdk: Option<String>,
+    /// Latest mod SDK release tag, per SDK repo (BL1E's SDK isn't BL2's).
+    pub sdk: HashMap<&'static str, String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -414,6 +417,8 @@ impl Workspace {
             run_watch: RunWatch::default(),
             _run_poll: Self::spawn_run_poll(cx),
         };
+        // Before reading anything: a capture cut short last time left its shot settings behind.
+        ws.recover_captures(cx);
         for i in 0..ws.games.len() {
             ws.refresh_game(i);
         }
@@ -597,7 +602,7 @@ impl Workspace {
                 .is_some_and(|t| t.read(config).as_ref() != Some(v))
         });
 
-        game.exe = game.exe_path().filter(|p| p.is_file()).map(|path| scan_exe(def, &path));
+        game.exe = game.exe_path().filter(|p| p.is_file()).and_then(|path| scan_exe(def, &path));
         game.invalidate_statuses();
 
         match (def.mods, &game.install) {
@@ -688,10 +693,8 @@ impl Workspace {
         if preset.values.is_empty() {
             // An empty preset means "factory settings" for everything except
             // the monitor-specific display choices.
-            for tweak in def.visible_tweaks() {
-                if !matches!(tweak.id, "resolution" | "window_mode" | "fullscreen") {
-                    self.stage(tweak, tweak.default.to_value(), cx);
-                }
+            for tweak in factory_tweaks(def) {
+                self.stage(tweak, tweak.default.to_value(), cx);
             }
         }
         for (id, value) in preset.values {
@@ -838,11 +841,14 @@ impl Workspace {
         }
         let game = self.game();
         let profile = crate::profiles::snapshot(game.def, name, |t| game.effective(t));
+        // Saving under an existing name updates that profile, and says so.
+        let replaces = crate::profiles::find(game.def.id, name).is_some();
         let path = crate::profiles::path_for(game.def.id, name);
         match crate::profiles::write(&profile, &path) {
             Ok(()) => {
                 self.game_mut().reload_profiles();
-                self.toast(ToastKind::Success, format!("Saved profile \u{201c}{name}\u{201d}"), cx);
+                let verb = if replaces { "Updated" } else { "Saved" };
+                self.toast(ToastKind::Success, format!("{verb} profile \u{201c}{name}\u{201d}"), cx);
                 true
             }
             Err(e) => {
@@ -880,8 +886,10 @@ impl Workspace {
     /// Copies a profile file into this game's profile folder.
     pub fn import_profile(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         let def = self.game().def;
-        let result = crate::profiles::read(path).and_then(|p| {
+        let result = crate::profiles::read(path).and_then(|mut p| {
             crate::profiles::resolve(def, &p)?;
+            // Never over a profile already saved: a clashing name becomes "Name (2)".
+            p.name = crate::profiles::unused_name(def.id, &p.name);
             crate::profiles::write(&p, &crate::profiles::path_for(def.id, &p.name))?;
             Ok(p.name)
         });
@@ -912,12 +920,18 @@ impl Workspace {
     /// One background check per launch: a newer Vault Patcher, and the latest
     /// mod SDK. Silent without a network.
     fn check_updates(&mut self, cx: &mut Context<Self>) {
-        let sdk_repo = self.games.iter().find_map(|g| g.def.mods).map(|m| m.sdk_repo);
+        let mut repos: Vec<&'static str> = self.games.iter().filter_map(|g| g.def.mods).map(|m| m.sdk_repo).collect();
+        repos.sort_unstable();
+        repos.dedup();
         let task = cx.background_executor().spawn(async move {
-            let app = crate::core::net::latest_release(crate::compare::IMAGE_REPO)
+            // Only version tags count: the same repo publishes image packs.
+            let app = crate::core::net::latest_app_release(crate::compare::IMAGE_REPO)
                 .ok()
                 .filter(|(tag, _)| crate::core::net::is_newer(tag, env!("CARGO_PKG_VERSION")));
-            let sdk = sdk_repo.and_then(|r| crate::core::net::latest_release(r).ok()).map(|(tag, _)| tag);
+            let sdk = repos
+                .into_iter()
+                .filter_map(|r| crate::core::net::latest_release(r).ok().map(|(tag, _)| (r, tag)))
+                .collect();
             Updates { app, sdk }
         });
         cx.spawn(async move |this, cx| {
@@ -932,11 +946,18 @@ impl Workspace {
     }
 
     /// The newer SDK release, when the installed one is outdated.
+    /// An SDK installed from a zip has no known version, so it's never
+    /// reported as outdated.
     pub fn sdk_update_available(&self) -> Option<&str> {
-        match (&self.game().sdk, self.updates.sdk.as_deref()) {
-            (SdkStatus::Installed(v), Some(latest)) if v != latest => Some(latest),
+        match (&self.game().sdk, self.latest_sdk()) {
+            (SdkStatus::Installed(v), Some(latest)) if v != latest && v != "manual" => Some(latest),
             _ => None,
         }
+    }
+
+    /// The latest release of the active game's own mod SDK, if checked.
+    pub fn latest_sdk(&self) -> Option<&str> {
+        self.game().def.mods.and_then(|m| self.updates.sdk.get(m.sdk_repo)).map(String::as_str)
     }
 
     /// Edits game `gi`'s configs with `edit` and writes them, after:
@@ -985,14 +1006,15 @@ impl Workspace {
             game.update_applied(|a| a.merge(&changed))?;
             return Ok(changed.len());
         }
-        let recent = game.backups.first().is_some_and(|b| {
-            b.label == label
-                && b.dir.metadata().and_then(|m| m.modified()).is_ok_and(|t| {
-                    t.elapsed().unwrap_or_default() < Duration::from_secs(5 * 60)
-                })
-        });
-        if !(coalesce && recent) {
-            backup::create(def.id, label, &dirty).context("creating backup")?;
+        match snapshot_plan(game.backups.first().filter(|_| coalesce), label, &dirty, chrono::Local::now().naive_local()) {
+            SnapshotPlan::New => {
+                backup::create(def.id, label, &dirty).context("creating backup")?;
+            }
+            SnapshotPlan::Extend(missing) => {
+                let mut recent = game.backups[0].clone();
+                backup::add_files(&mut recent, &missing).context("creating backup")?;
+            }
+            SnapshotPlan::Covered => {}
         }
         let written = config.save_dirty();
         game.config = ConfigSet::load(&dir, def.ini_files);
@@ -1134,7 +1156,7 @@ impl Workspace {
 
     pub fn start_capture(&mut self, cx: &mut Context<Self>) {
         use crate::compare::{self, CaptureProgress, CaptureRequest};
-        if self.capture_running() {
+        if self.capture_running() || self.refused(self.job_blocker(), cx) {
             return;
         }
         let game = self.game();
@@ -1224,12 +1246,69 @@ impl Workspace {
         self.setup_run.as_ref().is_some_and(|r| !r.finished)
     }
 
+    /// Why a job that changes game files can't start now: a setup run, a
+    /// Mods page job or a capture is already going (they'd share files and
+    /// downloads).
+    fn job_blocker(&self) -> Option<&'static str> {
+        if self.capture_running() {
+            Some("A comparison capture is running \u{2014} wait for it to finish")
+        } else if self.setup_running() || self.busy.is_some() {
+            Some("Still working \u{2014} wait for it to finish")
+        } else {
+            None
+        }
+    }
+
+    /// `job_blocker`, and also the game running (its files are in use, and
+    /// it would half-load a changing mod setup).
+    fn mods_blocker(&self) -> Option<String> {
+        self.job_blocker().map(str::to_string).or_else(|| {
+            self.game().is_running().then(|| format!("{} is running \u{2014} close it first", self.game().def.name))
+        })
+    }
+
+    /// Toasts `reason` and returns true when there is one.
+    fn refused(&mut self, reason: Option<impl Into<String>>, cx: &mut Context<Self>) -> bool {
+        let Some(reason) = reason else { return false };
+        self.toast(ToastKind::Info, reason, cx);
+        true
+    }
+
+    /// Asked when the window is about to close: refuses while a capture or
+    /// an install is half-way, since quitting then would leave the game's
+    /// settings or files half-changed.
+    pub fn allow_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let reason = if self.capture_running() {
+            "A comparison capture is running. Press Stop and wait for your settings to be put back, then close"
+        } else if self.setup_running() || self.busy.is_some() {
+            "Still working. Wait for it to finish, then close"
+        } else {
+            return true;
+        };
+        self.toast(ToastKind::Info, reason, cx);
+        false
+    }
+
+    /// Undoes comparison captures the app didn't get to finish last time.
+    fn recover_captures(&mut self, cx: &mut Context<Self>) {
+        for outcome in crate::compare::recover_interrupted() {
+            match outcome {
+                Ok(msg) => self.toast(ToastKind::Info, msg, cx),
+                Err(e) => self.toast(ToastKind::Error, format!("{e:#}"), cx),
+            }
+        }
+    }
+
     /// Installs the selected components that aren't active yet (in list
     /// order); with `Uninstall` removes every active component, and with
     /// `Reapply` puts back what was installed and rewrites remembered
     /// settings and exe patches.
     pub fn run_setup(&mut self, goal: SetupGoal, cx: &mut Context<Self>) {
         if self.setup_running() {
+            return;
+        }
+        // A Mods page install or a capture would share its files.
+        if self.refused(self.job_blocker(), cx) {
             return;
         }
         let game = self.game();
@@ -1541,9 +1620,7 @@ impl Workspace {
             }
         }
         if patched > 0 {
-            backup::create(def.id, "Before re-applying exe patches", std::slice::from_ref(&path))?;
-            backup::clear_readonly(&path);
-            std::fs::write(&path, &bytes).with_context(|| format!("writing {} (is the game running?)", path.display()))?;
+            write_exe(def.id, &path, "Before re-applying exe patches", &bytes)?;
         }
         Ok(patched)
     }
@@ -1617,10 +1694,7 @@ impl Workspace {
                 let path = self.games[gi].exe_path().context("game install not found")?;
                 let mut bytes = patches::read_exe(&path)?;
                 p.set(&mut bytes, !uninstall)?;
-                backup::create(game_id, &format!("Before {}", p.name), std::slice::from_ref(&path))?;
-                backup::clear_readonly(&path);
-                std::fs::write(&path, bytes)
-                    .with_context(|| format!("writing {} (is the game running?)", path.display()))?;
+                write_exe(game_id, &path, &format!("Before {}", p.name), &bytes)?;
                 self.games[gi].update_applied(|a| a.set_patch(p.id, !uninstall))?;
                 Job::Done(if uninstall { "Reverted" } else { "Patched" }.into())
             }
@@ -1743,12 +1817,7 @@ impl Workspace {
             let mut bytes = patches::read_exe(&path)?;
             patch.set(&mut bytes, enabled)?;
             let verb = if enabled { "Before applying" } else { "Before reverting" };
-            backup::create(game.def.id, &format!("{verb} {}", patch.name), std::slice::from_ref(&path))?;
-            backup::clear_readonly(&path);
-            std::fs::write(&path, bytes).with_context(|| {
-                format!("writing {} (is the game running?)", path.display())
-            })?;
-            Ok(())
+            write_exe(game.def.id, &path, &format!("{verb} {}", patch.name), &bytes)
         })();
         match result {
             Ok(()) => {
@@ -1839,6 +1908,9 @@ impl Workspace {
     // ---- mods --------------------------------------------------------------------
 
     pub fn install_sdk(&mut self, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let game = self.game();
         let (Some(support), Some(install)) = (game.def.mods, game.install.clone()) else {
             return;
@@ -1869,6 +1941,9 @@ impl Workspace {
     }
 
     pub fn install_sdk_from_zip(&mut self, zip: PathBuf, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let game = self.game();
         let (Some(support), Some(install)) = (game.def.mods, game.install.clone()) else {
             return;
@@ -1882,6 +1957,9 @@ impl Workspace {
     }
 
     pub fn uninstall_sdk(&mut self, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let game = self.game();
         let (Some(support), Some(install)) = (game.def.mods, game.install.clone()) else {
             return;
@@ -1895,6 +1973,9 @@ impl Workspace {
     }
 
     pub fn install_mod_files(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let game = self.game();
         let (Some(support), Some(install)) = (game.def.mods, game.install.clone()) else {
             return;
@@ -1913,6 +1994,9 @@ impl Workspace {
     }
 
     pub fn set_mod_enabled(&mut self, path: PathBuf, enabled: bool, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let game = self.game();
         let (Some(support), Some(install)) = (game.def.mods, game.install.clone()) else {
             return;
@@ -1927,6 +2011,9 @@ impl Workspace {
     }
 
     pub fn remove_mod(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.refused(self.mods_blocker(), cx) {
+            return;
+        }
         let Some(entry) = self.game().mods.iter().find(|m| m.path == path).cloned() else {
             return;
         };
@@ -2001,7 +2088,7 @@ impl Workspace {
 
     pub fn launch(&mut self, mode: LaunchMode, cx: &mut Context<Self>) {
         // The game would lock the files a setup run is writing.
-        if self.setup_running() {
+        if self.job_blocker().is_some() {
             self.toast(ToastKind::Info, "Still working — wait for it to finish, then play", cx);
             return;
         }
@@ -2098,6 +2185,10 @@ impl Workspace {
         if was_background {
             self.apply_run_audio();
             cx.emit(RunEvent::BringToFront);
+        }
+        // A recovery that had to wait for the game to close can run now.
+        if !self.capture_running() {
+            self.recover_captures(cx);
         }
         self.refresh_game(gi);
         self.toast(ToastKind::Success, message, cx);
@@ -2351,12 +2442,50 @@ fn run_audio(background: bool, settings: &AppSettings) -> (bool, bool) {
     }
 }
 
+/// The settings "Factory Settings" puts back. Skips the monitor-specific
+/// display choices, and Simple mode's combined "quick" controls: those only
+/// read and write keys the plain settings own (the framerate limit is
+/// `fps_lock`'s `FramerateLocking`), so resetting both would fight over them.
+fn factory_tweaks(def: &'static GameDef) -> impl Iterator<Item = &'static Tweak> {
+    def.visible_tweaks()
+        .filter(|t| t.category != "quick" && !matches!(t.id, "resolution" | "window_mode" | "fullscreen"))
+}
+
 /// Label shared by Quick Settings saves, so a burst of edits shares one backup.
 const QUICK_LABEL: &str = "Before Quick Settings changes";
 
+/// How a settings write snapshots the files it's about to change.
+#[derive(Debug, PartialEq)]
+enum SnapshotPlan {
+    /// A new backup of every changed file.
+    New,
+    /// Add these files to the burst's backup; it holds the others already.
+    Extend(Vec<PathBuf>),
+    /// The burst's backup already holds every file, as it was before the burst.
+    Covered,
+}
+
+/// A burst of Quick Settings saves shares one backup (`recent`, the newest
+/// one, if it has `label` and is under five minutes old), but every file the
+/// burst touches must be in it — a later edit to another file adds that file.
+fn snapshot_plan(recent: Option<&Backup>, label: &str, dirty: &[PathBuf], now: chrono::NaiveDateTime) -> SnapshotPlan {
+    let fresh = recent.filter(|b| {
+        b.label == label
+            && chrono::NaiveDateTime::parse_from_str(&b.created_at, "%Y-%m-%d %H:%M:%S")
+                .is_ok_and(|at| (chrono::TimeDelta::zero()..chrono::TimeDelta::minutes(5)).contains(&(now - at)))
+    });
+    match fresh.map(|b| backup::missing_from(b, dirty)) {
+        None => SnapshotPlan::New,
+        Some(missing) if missing.is_empty() => SnapshotPlan::Covered,
+        Some(missing) => SnapshotPlan::Extend(missing),
+    }
+}
+
 /// Patch states for an exe, cached by size and modification time so the
-/// multi-megabyte scan only runs when the exe actually changed.
-fn scan_exe(def: &GameDef, path: &std::path::Path) -> ExeInfo {
+/// multi-megabyte scan only runs when the exe actually changed. `None` when
+/// the exe can't be read right now (a virus scan or Steam update holding
+/// it); that isn't cached, so the next refresh tries again.
+fn scan_exe(def: &GameDef, path: &std::path::Path) -> Option<ExeInfo> {
     use std::sync::Mutex;
     type Key = (PathBuf, u64, Option<std::time::SystemTime>);
     static CACHE: Mutex<Vec<(Key, ExeInfo)>> = Mutex::new(Vec::new());
@@ -2367,9 +2496,9 @@ fn scan_exe(def: &GameDef, path: &std::path::Path) -> ExeInfo {
         meta.and_then(|m| m.modified().ok()),
     );
     if let Some((_, info)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
-        return info.clone();
+        return Some(info.clone());
     }
-    let bytes = patches::read_exe(path).unwrap_or_default();
+    let bytes = patches::read_exe(path).ok()?;
     let info = ExeInfo {
         size: bytes.len() as u64,
         patch_states: def.patches.iter().map(|p| (p.id, p.state(&bytes))).collect(),
@@ -2377,13 +2506,43 @@ fn scan_exe(def: &GameDef, path: &std::path::Path) -> ExeInfo {
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|(k, _)| k.0 != key.0);
     cache.push((key, info.clone()));
-    info
+    Some(info)
 }
 
 /// Work for one setup step.
 enum Job {
     Done(String),
     Background(Box<dyn FnOnce() -> Result<String> + Send>),
+}
+
+/// Snapshots the game exe, replaces it with `bytes` in one step (never a
+/// half-written exe) and reads it back to be sure it landed. Old exe
+/// snapshots are pruned, keeping the very first one (the exe as it shipped).
+fn write_exe(game_id: &str, path: &std::path::Path, label: &str, bytes: &[u8]) -> Result<()> {
+    backup::create(game_id, label, &[path.to_path_buf()])?;
+    crate::core::atomic::write(path, bytes).with_context(|| format!("is the game running? ({})", path.display()))?;
+    if std::fs::read(path).ok().as_deref() != Some(bytes) {
+        return Err(anyhow!("{} didn't save correctly; restore it from Backups", path.display()));
+    }
+    for old in exe_backups_to_prune(&backup::list(game_id), EXE_BACKUPS_KEPT) {
+        let _ = backup::delete(old);
+    }
+    Ok(())
+}
+
+/// Recent exe snapshots kept besides the first one.
+const EXE_BACKUPS_KEPT: usize = 3;
+
+/// Exe-only snapshots (each a full copy of a 30+ MB exe) past the newest
+/// `keep`, never the oldest one, which holds the exe as it shipped.
+/// `backups` is newest first, as `backup::list` returns them.
+fn exe_backups_to_prune(backups: &[Backup], keep: usize) -> Vec<&Backup> {
+    let exe_only: Vec<&Backup> = backups
+        .iter()
+        .filter(|b| !b.files.is_empty() && b.files.iter().all(|f| f.original.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))))
+        .collect();
+    let oldest = exe_only.len().saturating_sub(1);
+    exe_only.into_iter().enumerate().filter(|&(i, _)| i >= keep && i != oldest).map(|(_, b)| b).collect()
 }
 
 /// Keeps the newest `max` config-only snapshots. Snapshots holding anything
@@ -2508,6 +2667,57 @@ mod run_watch_tests {
                 assert!(!reapply_wants(&c.kind, &missing, true), "{}", c.id);
             }
         }
+    }
+
+    fn fake_backup(label: &str, at: &str, files: &[&str]) -> Backup {
+        Backup {
+            label: label.into(),
+            created_at: at.into(),
+            files: files.iter().map(|f| backup::BackupEntry { stored_as: String::new(), original: PathBuf::from(f), created: false }).collect(),
+            dir: PathBuf::from(at),
+        }
+    }
+
+    #[test]
+    fn a_quick_settings_burst_snapshots_every_file_it_touches() {
+        let now = chrono::NaiveDateTime::parse_from_str("2026-09-26 12:03:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let engine = PathBuf::from(r"C:\Cfg\WillowEngine.ini");
+        let input = PathBuf::from(r"C:\Cfg\WillowInput.ini");
+        let recent = fake_backup(QUICK_LABEL, "2026-09-26 12:01:00", &[r"c:\cfg\willowengine.ini"]);
+        assert_eq!(snapshot_plan(Some(&recent), QUICK_LABEL, std::slice::from_ref(&engine), now), SnapshotPlan::Covered);
+        assert_eq!(snapshot_plan(Some(&recent), QUICK_LABEL, &[engine.clone(), input.clone()], now), SnapshotPlan::Extend(vec![input.clone()]), "a later edit to another file adds it");
+        let old = fake_backup(QUICK_LABEL, "2026-09-26 11:50:00", &[r"C:\Cfg\WillowEngine.ini"]);
+        assert_eq!(snapshot_plan(Some(&old), QUICK_LABEL, std::slice::from_ref(&engine), now), SnapshotPlan::New);
+        let other = fake_backup("Before applying 2 change(s)", "2026-09-26 12:02:00", &[r"C:\Cfg\WillowEngine.ini"]);
+        assert_eq!(snapshot_plan(Some(&other), QUICK_LABEL, std::slice::from_ref(&engine), now), SnapshotPlan::New);
+        assert_eq!(snapshot_plan(None, QUICK_LABEL, std::slice::from_ref(&engine), now), SnapshotPlan::New);
+    }
+
+    #[test]
+    fn exe_snapshots_keep_the_first_and_the_newest() {
+        let exe = r"D:\Game\Borderlands2.exe";
+        // Newest first, as backup::list returns them.
+        let list: Vec<Backup> = (0..7).rev().map(|i| fake_backup("Before applying", &format!("{i}"), &[exe])).chain([fake_backup("config", "x", &[r"C:\Cfg\WillowEngine.ini"])]).collect();
+        let doomed: Vec<&str> = exe_backups_to_prune(&list, 3).iter().map(|b| b.created_at.as_str()).collect();
+        assert_eq!(doomed, ["3", "2", "1"], "keeps 6, 5, 4 and the original 0");
+        assert!(exe_backups_to_prune(&list[..2], 3).is_empty());
+    }
+
+    #[test]
+    fn factory_settings_agree_on_the_framerate_limit() {
+        let def = &crate::games::bl2::GAME;
+        assert!(factory_tweaks(def).all(|t| t.category != "quick"));
+        let dir = std::env::temp_dir().join("vaultpatcher-factory-fps");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("LauncherConfig")).unwrap();
+        std::fs::write(dir.join("WillowEngine.ini"), "[SystemSettings]\r\nFramerateLocking=6\r\n[Engine.Engine]\r\nbSmoothFrameRate=FALSE\r\n").unwrap();
+        let mut config = ConfigSet::load(&dir, def.ini_files);
+        for t in factory_tweaks(def) {
+            t.write(&mut config, &t.default.to_value());
+        }
+        let target = def.tweak("fps_target").unwrap();
+        assert_eq!(target.read(&config), Some(target.default.to_value()), "the quick control reads its own default after a reset");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

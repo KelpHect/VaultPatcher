@@ -47,8 +47,13 @@ pub fn plan_replace(
     if users.is_empty() {
         return Ok(carried);
     }
-    let backup = backup::create(game_id, label, &users)?;
-    Ok(Some(carried.unwrap_or(backup.dir)))
+    // User files first seen on this run join the earlier backup, so
+    // uninstall puts back every one of them.
+    if let Some(mut earlier) = carried.as_deref().and_then(backup::load) {
+        backup::add_files(&mut earlier, &users)?;
+        return Ok(Some(earlier.dir));
+    }
+    Ok(Some(backup::create(game_id, label, &users)?.dir))
 }
 
 pub fn remove(game_id: &str, component: &str) {
@@ -67,14 +72,19 @@ pub fn read(game_id: &str, component: &str) -> Option<Manifest> {
 
 pub fn write(game_id: &str, component: &str, manifest: &Manifest) -> Result<()> {
     let path = path(game_id, component);
-    fs::create_dir_all(path.parent().expect("manifest path has a parent"))?;
-    fs::write(path, serde_json::to_vec_pretty(manifest)?)?;
-    Ok(())
+    super::atomic::write(&path, &serde_json::to_vec_pretty(manifest)?)
 }
 
 /// Deletes the recorded files (only those under `root`), then any folders the
 /// install created that are now empty, then the manifest itself.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn uninstall(game_id: &str, component: &str, root: &Path) -> Result<()> {
+    uninstall_with(game_id, component, root, |_| None)
+}
+
+/// `uninstall`, also deleting each recorded file's `moved` copy (where the
+/// Mods page parks a file the user disabled), so nothing is left behind.
+pub fn uninstall_with(game_id: &str, component: &str, root: &Path, moved: impl Fn(&Path) -> Option<PathBuf>) -> Result<()> {
     let Some(manifest) = read(game_id, component) else {
         anyhow::bail!("no install record for {component}");
     };
@@ -86,7 +96,8 @@ pub fn uninstall(game_id: &str, component: &str, root: &Path) -> Result<()> {
             outside.display()
         );
     }
-    for file in &manifest.files {
+    let twins: Vec<PathBuf> = manifest.files.iter().filter_map(|f| moved(f)).filter(|t| inside(t, root)).collect();
+    for file in manifest.files.iter().chain(&twins) {
         if file.is_file() {
             backup::clear_readonly(file);
             fs::remove_file(file)
@@ -96,6 +107,7 @@ pub fn uninstall(game_id: &str, component: &str, root: &Path) -> Result<()> {
     let mut dirs: Vec<PathBuf> = manifest
         .files
         .iter()
+        .chain(&twins)
         .flat_map(|f| f.ancestors().skip(1).map(Path::to_path_buf).collect::<Vec<_>>())
         .filter(|d| inside(d, root))
         .collect();
@@ -175,6 +187,45 @@ mod install_tests {
         for b in backup::list(game) {
             let _ = backup::delete(&b);
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn user_files_first_seen_on_an_update_are_restored_too() {
+        let game = "test-replace-new";
+        let root = sandbox("replace-new");
+        let (dll, conf) = (root.join("dxgi.dll"), root.join("dxvk.conf"));
+        fs::write(&dll, "user's dll").unwrap();
+        let first = plan_replace(game, "dxvk", "first", &[dll.clone(), conf.clone()]).unwrap();
+        write(game, "dxvk", &Manifest { version: "1".into(), files: vec![dll.clone()], replaced: first.clone() }).unwrap();
+        fs::write(&dll, "ours").unwrap();
+        // The user adds their own conf later; the update replaces it.
+        fs::write(&conf, "user's conf").unwrap();
+        let again = plan_replace(game, "dxvk", "update", &[dll.clone(), conf.clone()]).unwrap();
+        assert_eq!(again, first, "still one backup");
+        write(game, "dxvk", &Manifest { version: "2".into(), files: vec![dll.clone(), conf.clone()], replaced: again }).unwrap();
+        fs::write(&conf, "ours").unwrap();
+        uninstall(game, "dxvk", &root).unwrap();
+        assert_eq!(fs::read_to_string(&dll).unwrap(), "user's dll");
+        assert_eq!(fs::read_to_string(&conf).unwrap(), "user's conf");
+        for b in backup::list(game) {
+            let _ = backup::delete(&b);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn uninstall_also_removes_disabled_copies() {
+        let game = "test-moved-copy";
+        let root = sandbox("moved-copy");
+        let file = root.join("sdk_mods").join("fix.sdkmod");
+        let parked = root.join("sdk_mods_disabled").join("fix.sdkmod");
+        fs::create_dir_all(parked.parent().unwrap()).unwrap();
+        fs::write(&parked, b"x").unwrap();
+        write(game, "fix", &Manifest { version: "1".into(), files: vec![file.clone()], replaced: None }).unwrap();
+        let twin = parked.clone();
+        uninstall_with(game, "fix", &root, move |f| (f == file).then(|| twin.clone())).unwrap();
+        assert!(!parked.exists() && read(game, "fix").is_none());
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -10,7 +10,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::core::display::DisplayMode;
 use crate::core::manifest::{self, Manifest};
-use crate::core::{backup, binpatch::PatchState, net};
+use crate::core::{atomic, backup, binpatch::PatchState, net};
 use crate::mods::SdkStatus;
 use crate::tweaks::{ConfigSet, DefaultValue};
 use crate::workspace::GameState;
@@ -183,6 +183,9 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
             Some(PatchState::Patched) => Status::Active(None),
             Some(PatchState::Unpatched) => Status::Missing,
             Some(PatchState::Unsupported) => Status::Blocked("Unrecognized exe version".into()),
+            None if root.is_some_and(|r| r.join(game.def.exe).is_file()) => {
+                Status::Blocked("Couldn't read the game exe (is Steam updating it?). Try Refresh in a moment".into())
+            }
             None => needs_install(),
         },
         ComponentKind::LaunchArg(arg) => {
@@ -217,7 +220,7 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
         },
         ComponentKind::SdkZip { folder, .. } => {
             let Some(root) = root else { return needs_install() };
-            if root.join("sdk_mods").join(folder).is_dir() {
+            if present_or_parked(root, &root.join("sdk_mods").join(folder), Path::is_dir) {
                 Status::Active(None)
             } else {
                 Status::Missing
@@ -226,7 +229,10 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
         ComponentKind::Archive { dest, .. } => {
             let Some(root) = root else { return needs_install() };
             match manifest::read(game.def.id, c.id) {
-                Some(m) if m.files.iter().all(|f| f.is_file() || disabled_twin(f).is_some_and(|p| p.is_file())) && root.join(dest).exists() => {
+                Some(m)
+                    if m.files.iter().all(|f| present_or_parked(root, f, Path::is_file))
+                        && present_or_parked(root, &root.join(dest), Path::exists) =>
+                {
                     Status::Active(None)
                 }
                 Some(_) => Status::Partial,
@@ -247,7 +253,7 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
         ComponentKind::TextPatch { .. } => {
             let Some(root) = root else { return needs_install() };
             let included = text_patch_parts(game.def.id);
-            if included.iter().any(|p| p == c.id) && root.join(TEXT_PATCH_FILE).is_file() {
+            if included.iter().any(|p| p == c.id) && present_or_parked(root, &root.join(TEXT_PATCH_FILE), Path::is_file) {
                 Status::Active(None)
             } else {
                 Status::Missing
@@ -256,7 +262,7 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
         ComponentKind::File { dest, .. } => {
             let Some(root) = root else { return needs_install() };
             let path = root.join(dest);
-            if path.is_file() || disabled_twin(&path).is_some_and(|p| p.is_file()) {
+            if present_or_parked(root, &path, Path::is_file) {
                 Status::Active(None)
             } else {
                 Status::Missing
@@ -289,11 +295,10 @@ pub fn record_settings_applied(game_id: &str, component: &str) -> Result<()> {
     manifest::write(game_id, component, &Manifest { version: "applied".into(), files: Vec::new(), replaced: None })
 }
 
-/// Where the mod manager parks a disabled copy of an SDK mod file.
-fn disabled_twin(path: &Path) -> Option<PathBuf> {
-    let dir = path.parent()?;
-    let name = dir.file_name()?.to_string_lossy();
-    Some(dir.with_file_name(format!("{name}_disabled")).join(path.file_name()?))
+/// `path` is there, or the user disabled it on the Mods page (which moves it
+/// aside, see `mods::disabled_twin`). Either way it's installed.
+fn present_or_parked(root: &Path, path: &Path, is: impl Fn(&Path) -> bool) -> bool {
+    is(path) || crate::mods::disabled_twin(root, path).is_some_and(|p| is(&p))
 }
 
 /// Downloads the latest DXVK, installs its DLLs next to the exe and writes
@@ -302,7 +307,7 @@ pub fn install_dxvk(game_id: &str, component: &str, root: &Path, target: DxvkTar
     let asset = net::latest_asset("doitsujin/dxvk", |n| {
         n.starts_with("dxvk-") && !n.contains("native") && n.ends_with(".tar.gz")
     })?;
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-{}", asset.name));
+    let tmp = atomic::temp_file(&asset.name);
     net::download(&asset.url, &tmp)?;
 
     let dest_dir = root.join(exe_dir);
@@ -331,14 +336,14 @@ pub fn install_dxvk(game_id: &str, component: &str, root: &Path, target: DxvkTar
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes)?;
             backup::clear_readonly(&out);
-            fs::write(&out, bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
+            atomic::write(&out, &bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
         }
     }
     fs::remove_file(&tmp).ok();
     if !wanted.is_empty() {
         bail!("DXVK archive layout changed: missing {}", wanted[0].0);
     }
-    fs::write(dest_dir.join("dxvk.conf"), conf)?;
+    atomic::write(&dest_dir.join("dxvk.conf"), conf.as_bytes())?;
     Ok(asset.tag)
 }
 
@@ -360,7 +365,12 @@ pub fn install_file(
         component,
         &Manifest { version: "latest".into(), files: vec![out.clone()], replaced },
     )?;
-    net::download(url, &out)?;
+    // Downloaded outside the game folder, so a failed download leaves no
+    // stray file there, then swapped in whole.
+    let tmp = atomic::temp_file("download");
+    let fetched = net::download(url, &tmp).and_then(|()| Ok(fs::read(&tmp)?));
+    fs::remove_file(&tmp).ok();
+    atomic::write(&out, &fetched?).with_context(|| format!("close the game first ({})", out.display()))?;
     if let Some(module) = enable {
         enable_sdk_module(root, module)?;
     }
@@ -420,7 +430,7 @@ pub fn install_archive(
     skip: &[&str],
     enable: Option<&str>,
 ) -> Result<String> {
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-{component}.zip"));
+    let tmp = atomic::temp_file(&format!("{component}.zip"));
     net::download(url, &tmp)?;
     let mut archive = zip::ZipArchive::new(fs::File::open(&tmp)?).context("not a valid zip")?;
     let dest_dir = root.join(dest);
@@ -450,7 +460,7 @@ pub fn install_archive(
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
         backup::clear_readonly(&out);
-        fs::write(&out, bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
+        atomic::write(&out, &bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
     }
     fs::remove_file(&tmp).ok();
     if let Some(module) = enable {
@@ -461,7 +471,7 @@ pub fn install_archive(
 
 /// Downloads a zipped SDK mod and extracts its folder into `sdk_mods`.
 pub fn install_sdk_zip(game_id: &str, component: &str, root: &Path, url: &str, folder: &str) -> Result<String> {
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-{component}.zip"));
+    let tmp = atomic::temp_file(&format!("{component}.zip"));
     net::download(url, &tmp)?;
     let mut archive = zip::ZipArchive::new(fs::File::open(&tmp)?).context("not a valid zip")?;
     let sdk_mods = root.join("sdk_mods");
@@ -488,7 +498,7 @@ pub fn install_sdk_zip(game_id: &str, component: &str, root: &Path, url: &str, f
         fs::create_dir_all(out.parent().expect("zip entry has a parent"))?;
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
-        fs::write(&out, bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
+        atomic::write(&out, &bytes).with_context(|| format!("writing {} (close the game first)", out.display()))?;
         written.push(out);
     }
     fs::remove_file(&tmp).ok();
@@ -514,12 +524,7 @@ pub fn text_patch_parts(game_id: &str) -> Vec<String> {
 }
 
 fn download_text(url: &str) -> Result<String> {
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-textmod-{:x}.txt", {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        url.hash(&mut h);
-        h.finish()
-    }));
+    let tmp = atomic::temp_file("textmod.txt");
     net::download(url, &tmp)?;
     let bytes = fs::read(&tmp)?;
     fs::remove_file(&tmp).ok();
@@ -538,8 +543,12 @@ pub fn rebuild_text_patch(
     use crate::textmod::{self, MergeInfo, Source};
     let out = root.join(TEXT_PATCH_FILE);
     if parts.is_empty() {
-        if out.is_file() {
-            fs::remove_file(&out)?;
+        // Also the copy the user disabled on the Mods page, if any.
+        for file in [Some(out.clone()), crate::mods::disabled_twin(root, &out)].into_iter().flatten() {
+            if file.is_file() {
+                backup::clear_readonly(&file);
+                fs::remove_file(&file)?;
+            }
         }
         set_tml_auto_enable(root, &out, false)?;
         fs::remove_file(parts_path(game_id)).ok();
@@ -571,11 +580,11 @@ pub fn rebuild_text_patch(
     if out.exists() {
         backup::create(game_id, "Before rebuilding the community patch", std::slice::from_ref(&out))?;
     }
-    fs::write(&out, textmod::encode(&text)).with_context(|| format!("writing {}", out.display()))?;
+    atomic::write(&out, &textmod::encode(&text)).with_context(|| format!("writing {}", out.display()))?;
     set_tml_auto_enable(root, &out, true)?;
     let ids: Vec<&str> = parts.iter().map(|(id, _)| *id).collect();
     fs::create_dir_all(parts_path(game_id).parent().expect("has parent"))?;
-    fs::write(parts_path(game_id), serde_json::to_vec(&ids)?)?;
+    atomic::write(&parts_path(game_id), &serde_json::to_vec(&ids)?)?;
     Ok(format!("{} mods merged", sources.len()))
 }
 
@@ -609,12 +618,14 @@ fn set_tml_auto_enable(root: &Path, file: &Path, enabled: bool) -> Result<()> {
         arr.push(serde_json::Value::String(path));
     }
     fs::create_dir_all(settings.parent().expect("has parent"))?;
-    fs::write(&settings, serde_json::to_vec_pretty(&json)?)?;
+    atomic::write(&settings, &serde_json::to_vec_pretty(&json)?)?;
     Ok(())
 }
 
+/// Removes a component's recorded files, including copies the user
+/// disabled on the Mods page, and puts back anything it replaced.
 pub fn uninstall_files(game_id: &str, component: &str, root: &Path) -> Result<()> {
-    manifest::uninstall(game_id, component, root)
+    manifest::uninstall_with(game_id, component, root, |f| crate::mods::disabled_twin(root, f))
 }
 
 #[cfg(test)]

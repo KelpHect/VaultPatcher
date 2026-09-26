@@ -55,24 +55,71 @@ pub fn read(path: &Path) -> Result<Profile> {
 }
 
 pub fn write(profile: &Profile, path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_vec_pretty(profile)?)?;
-    Ok(())
+    crate::core::atomic::write(path, &serde_json::to_vec_pretty(profile)?)
 }
 
-/// Where a profile with this name is stored; names map to safe file names.
+/// The saved profile called `name` (ignoring case), if there is one.
+pub fn find(game_id: &str, name: &str) -> Option<PathBuf> {
+    find_in(&dir(game_id), name)
+}
+
+fn find_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    let name = name.trim();
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .find(|p| read(p).is_ok_and(|profile| profile.name.trim().to_lowercase() == name.to_lowercase()))
+}
+
+/// Where a profile with this name is stored: the file of the profile already
+/// called that (so saving again updates it), else a new file whose name no
+/// other profile uses.
 pub fn path_for(game_id: &str, name: &str) -> PathBuf {
-    let slug: String = name
+    path_in(&dir(game_id), name)
+}
+
+fn path_in(dir: &Path, name: &str) -> PathBuf {
+    if let Some(existing) = find_in(dir, name) {
+        return existing;
+    }
+    let slug = slug(name);
+    (1..)
+        .map(|n| dir.join(if n == 1 { format!("{slug}.json") } else { format!("{slug}-{n}.json") }))
+        .find(|p| !p.exists())
+        .expect("some file name is free")
+}
+
+/// A safe file name for a profile: letters and digits of any script,
+/// lowercased, with dashes between words; never a reserved Windows name.
+fn slug(name: &str) -> String {
+    let slug = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .flat_map(|c| if c.is_alphanumeric() { c.to_lowercase().collect::<Vec<_>>() } else { vec!['-'] })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    dir(game_id).join(format!("{}.json", if slug.is_empty() { "profile".into() } else { slug }))
+    let reserved = ["con", "prn", "aux", "nul"].contains(&slug.as_str())
+        || (slug.len() == 4 && (slug.starts_with("com") || slug.starts_with("lpt")) && slug.ends_with(|c: char| c.is_ascii_digit()));
+    match slug.as_str() {
+        "" => "profile".into(),
+        _ if reserved => format!("{slug}-profile"),
+        _ => slug,
+    }
+}
+
+/// `name`, or `name (2)`, `name (3)`… — the first no saved profile uses.
+pub fn unused_name(game_id: &str, name: &str) -> String {
+    let dir = dir(game_id);
+    let name = name.trim();
+    (1..)
+        .map(|n| if n == 1 { name.to_string() } else { format!("{name} ({n})") })
+        .find(|n| find_in(&dir, n).is_none())
+        .expect("some name is free")
 }
 
 pub fn snapshot(def: &GameDef, name: &str, value_of: impl Fn(&'static Tweak) -> Value) -> Profile {
@@ -152,6 +199,31 @@ mod tests {
         junk.values.insert("post_chain".into(), "nonsense".into());
         let (_, skipped) = resolve(def, &junk).unwrap();
         assert_eq!(skipped, 2);
-        assert!(path_for("bl2", "My Look!").ends_with("my-look.json"));
+        assert_eq!(slug("My Look!"), "my-look");
+    }
+
+    #[test]
+    fn profile_names_never_share_a_file() {
+        let dir = std::env::temp_dir().join("vaultpatcher-profile-names");
+        let _ = std::fs::remove_dir_all(&dir);
+        let def = &crate::games::bl2::GAME;
+        let save = |name: &str| {
+            let path = path_in(&dir, name);
+            write(&snapshot(def, name, |t| t.default.to_value()), &path).unwrap();
+            path
+        };
+        let look = save("My Look");
+        assert!(look.ends_with("my-look.json"));
+        let other = save("my-look!");
+        assert_ne!(look, other, "a different name that slugs the same gets its own file");
+        assert_eq!(save("MY LOOK"), look, "the same name (any case) updates its file");
+        let (ru, jp) = (save("Ультра"), save("高画質"));
+        assert!(ru.ends_with("ультра.json") && jp.ends_with("高画質.json"));
+        assert!(save("!!!").ends_with("profile.json"));
+        assert!(save("???").ends_with("profile-2.json"));
+        assert_eq!(slug("CON"), "con-profile");
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| read(&e.path()).unwrap().name).collect();
+        assert_eq!(names.len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -5,7 +5,7 @@
 //! uninstall removes exactly those files and never touches the user's mods.
 
 use std::fs;
-use std::io::{Read as _, Write as _};
+use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
@@ -143,7 +143,7 @@ pub fn scan(support: &ModSupport, root: &Path) -> Vec<ModEntry> {
         }
     }
     let text_dir = root.join(support.text_mods_dir);
-    for (dir, enabled) in [(text_dir.clone(), true), (text_dir.join("VaultPatcher_disabled"), false)] {
+    for (dir, enabled) in [(text_dir.clone(), true), (text_dir.join(TEXT_DISABLED), false)] {
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -291,33 +291,47 @@ fn install_sdk_zip_versioned(
         }
         targets.push((i, target));
     }
+    let previous = manifest::read(game_id, SDK).map(|m| m.files).unwrap_or_default();
     let replaced =
         manifest::plan_replace(game_id, SDK, &format!("Before installing {}", support.sdk_name), &overwritten)?;
 
-    let mut written = Vec::new();
-    for (i, target) in targets {
-        let mut f = archive.by_index(i)?;
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut out = fs::File::create(&target).with_context(|| {
-            format!("writing {} (close the game first)", target.display())
-        })?;
-        std::io::copy(&mut f, &mut out)?;
-        out.flush()?;
-        written.push(target);
-    }
-    // The zip never contains user mods, so everything it wrote belongs to the
-    // SDK — except the settings folder, which holds the user's mod options.
+    // The zip never contains user mods, so everything it writes belongs to
+    // the SDK — except the settings folder, which holds the user's mod options.
     let settings = sdk_mods.join("settings");
+    let same = |a: &Path, b: &Path| a.as_os_str().eq_ignore_ascii_case(b.as_os_str());
+    let files: Vec<PathBuf> = targets.iter().map(|(_, t)| t.clone()).filter(|p| !p.starts_with(&settings)).collect();
+    // What the previous version installed that this one doesn't ship.
+    let stale: Vec<PathBuf> = previous.into_iter().filter(|old| !files.iter().any(|f| same(f, old))).collect();
+    // Recorded before extraction, with the previous version's files too, so
+    // a half-finished install still shows up as ours and can be removed.
     manifest::write(
         game_id,
         SDK,
         &Manifest {
-            version: version.to_string(),
-            files: written.into_iter().filter(|p| !p.starts_with(&settings)).collect(),
-            replaced,
+            version: format!("{version} (incomplete)"),
+            files: files.iter().chain(&stale).cloned().collect(),
+            replaced: replaced.clone(),
         },
+    )?;
+    for (i, target) in &targets {
+        let mut f = archive.by_index(*i)?;
+        let mut bytes = Vec::new();
+        f.read_to_end(&mut bytes)?;
+        crate::core::atomic::write(target, &bytes).with_context(|| format!("close the game first ({})", target.display()))?;
+    }
+    // A stale core module left in sdk_mods would load next to its
+    // replacement; anything that can't be removed stays on the record.
+    let kept: Vec<PathBuf> = stale
+        .into_iter()
+        .filter(|old| {
+            crate::core::backup::clear_readonly(old);
+            old.is_file() && fs::remove_file(old).is_err()
+        })
+        .collect();
+    manifest::write(
+        game_id,
+        SDK,
+        &Manifest { version: version.to_string(), files: files.into_iter().chain(kept).collect(), replaced },
     )?;
     fs::create_dir_all(&sdk_mods).ok();
     Ok(())
@@ -328,7 +342,7 @@ pub fn install_sdk_latest(game_id: &str, support: &ModSupport, root: &Path) -> R
     let asset = net::latest_asset(support.sdk_repo, |n| {
         n.contains(support.sdk_asset_hint) && n.ends_with(".zip")
     })?;
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-{game_id}-sdk.zip"));
+    let tmp = crate::core::atomic::temp_file(&format!("{game_id}-sdk.zip"));
     net::download(&asset.url, &tmp)?;
     let result = install_sdk_zip_versioned(game_id, support, root, &tmp, &asset.tag);
     fs::remove_file(&tmp).ok();
@@ -342,7 +356,30 @@ pub fn uninstall_sdk(game_id: &str, support: &ModSupport, root: &Path) -> Result
             support.sdk_name
         );
     }
-    manifest::uninstall(game_id, SDK, root)
+    manifest::uninstall_with(game_id, SDK, root, |f| disabled_twin(root, f))
+}
+
+/// Folder the Mods page moves disabled text mods into.
+const TEXT_DISABLED: &str = "VaultPatcher_disabled";
+
+/// Where the Mods page parks `path` (a file or folder under `root`) when the
+/// user disables it: the top-level entry under `sdk_mods/` moves to
+/// `sdk_mods_disabled/` with everything inside it, and a text mod in
+/// `Binaries/` moves into `Binaries/VaultPatcher_disabled/`. `None` for
+/// anything the Mods page doesn't move.
+pub fn disabled_twin(root: &Path, path: &Path) -> Option<PathBuf> {
+    let rel = path.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+    let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        [dir, rest @ ..] if dir.eq_ignore_ascii_case("sdk_mods") && !rest.is_empty() => {
+            Some(rest.iter().fold(disabled_dir(&root.join(dir)), |p, part| p.join(part)))
+        }
+        [dir, file] if dir.eq_ignore_ascii_case("Binaries") && {
+            let lower = file.to_ascii_lowercase();
+            lower.ends_with(".blcm") || lower.ends_with(".txt")
+        } => Some(root.join(dir).join(TEXT_DISABLED).join(file)),
+        _ => None,
+    }
 }
 
 pub fn install_mod(support: &ModSupport, root: &Path, file: &Path) -> Result<()> {
@@ -424,7 +461,7 @@ pub fn set_enabled(support: &ModSupport, root: &Path, entry: &ModEntry, enabled:
     let (on_dir, off_dir) = match entry.kind {
         ModKind::TextMod => {
             let dir = root.join(support.text_mods_dir);
-            (dir.clone(), dir.join("VaultPatcher_disabled"))
+            (dir.clone(), dir.join(TEXT_DISABLED))
         }
         _ => {
             let dir = root.join(support.sdk_mods_dir);
@@ -482,6 +519,66 @@ mod tests {
         assert!(!root.join("Binaries/Win32/ddraw.dll").exists());
         assert!(!root.join("Binaries/Win32/Plugins/unrealsdk.dll").exists());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn disabled_twins_follow_the_mods_page() {
+        let root = Path::new(r"D:\Games\BL");
+        let twin = |p: &str| disabled_twin(root, &root.join(p));
+        assert_eq!(twin(r"sdk_mods\BloodwingReturnFix\__init__.py"), Some(root.join(r"sdk_mods_disabled\BloodwingReturnFix\__init__.py")));
+        assert_eq!(twin(r"sdk_mods\BloodwingReturnFix"), Some(root.join(r"sdk_mods_disabled\BloodwingReturnFix")));
+        assert_eq!(twin("sdk_mods/firing_fix.sdkmod"), Some(root.join(r"sdk_mods_disabled\firing_fix.sdkmod")));
+        assert_eq!(twin(r"Binaries\VaultPatcher.blcm"), Some(root.join(r"Binaries\VaultPatcher_disabled\VaultPatcher.blcm")));
+        assert_eq!(twin("sdk_mods"), None);
+        assert_eq!(twin(r"Binaries\Win32\ddraw.dll"), None);
+        assert_eq!(disabled_twin(root, Path::new(r"C:\elsewhere\sdk_mods\x.sdkmod")), None);
+    }
+
+    fn sdk_zip(path: &Path, files: &[&str]) {
+        use std::io::Write as _;
+        let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        for name in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(name.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn sdk_installs_are_recorded_up_front_and_upgrades_drop_stale_files() {
+        let support = &crate::games::bl2::WILLOW2_SDK;
+        let game = "test-sdk";
+        let base = std::env::temp_dir().join("vaultpatcher-sdk-offline");
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("Game");
+        fs::create_dir_all(root.join("Binaries/Win32")).unwrap();
+        fs::write(root.join("Binaries/Win32/ddraw.dll"), "user's ddraw").unwrap();
+        let zip = base.join("sdk.zip");
+        let v1 = ["Binaries/Win32/ddraw.dll", "Binaries/Win32/Plugins/unrealsdk.dll", "sdk_mods/old_core.sdkmod", "sdk_mods/settings/x.json"];
+        sdk_zip(&zip, &v1);
+        install_sdk_zip_versioned(game, support, &root, &zip, "v1").unwrap();
+        assert_eq!(sdk_status(game, support, &root), SdkStatus::Installed("v1".into()));
+
+        // v2 no longer ships old_core; its extraction fails half-way.
+        let v2 = ["Binaries/Win32/Plugins/unrealsdk.dll", "sdk_mods/new_core.sdkmod", "sdk_mods/blocked.sdkmod"];
+        sdk_zip(&zip, &v2);
+        fs::create_dir_all(root.join("sdk_mods/blocked.sdkmod/in-the-way")).unwrap();
+        assert!(install_sdk_zip_versioned(game, support, &root, &zip, "v2").is_err());
+        assert_eq!(sdk_status(game, support, &root), SdkStatus::Installed("v2 (incomplete)".into()), "still ours, so it can be retried or removed");
+        fs::remove_dir_all(root.join("sdk_mods/blocked.sdkmod")).unwrap();
+        install_sdk_zip_versioned(game, support, &root, &zip, "v2").unwrap();
+        assert_eq!(sdk_status(game, support, &root), SdkStatus::Installed("v2".into()));
+        assert!(!root.join("sdk_mods/old_core.sdkmod").exists(), "a module the new version dropped is removed");
+        assert!(root.join("sdk_mods/settings/x.json").is_file(), "mod settings are the user's");
+
+        uninstall_sdk(game, support, &root).unwrap();
+        assert!(!root.join("Binaries/Win32/Plugins/unrealsdk.dll").exists() && !root.join("sdk_mods/new_core.sdkmod").exists());
+        assert_eq!(fs::read_to_string(root.join("Binaries/Win32/ddraw.dll")).unwrap(), "user's ddraw", "the user's own file comes back");
+        assert_eq!(sdk_status(game, support, &root), SdkStatus::NotInstalled);
+        for b in crate::core::backup::list(game) {
+            let _ = crate::core::backup::delete(&b);
+        }
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
