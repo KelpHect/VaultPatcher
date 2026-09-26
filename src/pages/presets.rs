@@ -55,10 +55,10 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         )
                         .child(ui::body(preset.description))
                         .when(!summary.is_empty(), |d| {
-                            d.child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(summary.join(" · ")))
+                            d.child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(summary.join(" · ")))
                         }),
                 )
-                .child(div().flex_none().text_size(px(12.)).text_color(theme::text_dim()).child(format!("{count} settings")))
+                .child(div().flex_none().text_size(px(12.)).text_color(theme::text_muted()).child(format!("{count} settings")))
                 .child(
                     ui::button(SharedString::from(format!("preset-{}", preset.id)), "Load", None, Variant::Secondary)
                         .tooltip(ui::tip("Adds these values to your waiting changes; nothing is written until Apply"))

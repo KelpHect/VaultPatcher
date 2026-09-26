@@ -187,7 +187,7 @@ pub(crate) fn view(
                         .flex()
                         .flex_col()
                         .child(ui::display(title.to_string(), 28.))
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(subtitle.to_string())),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(subtitle.to_string())),
                 )
                 .children(action),
         )
@@ -295,7 +295,7 @@ fn row(tweak: &'static Tweak, selected: bool, ws: &Entity<Workspace>, instant: b
                 .bg(if waiting {
                     theme::accent()
                 } else if changed {
-                    theme::text_dim()
+                    theme::text_muted()
                 } else {
                     gpui::transparent_black().into()
                 }),
@@ -315,7 +315,7 @@ fn row(tweak: &'static Tweak, selected: bool, ws: &Entity<Workspace>, instant: b
                         .when(has_pictures, |d| d.child(ui::icon(Icon::Picture).size(px(12.)).text_color(theme::text_dim())))
                         .when(tweak.flags.experimental, |d| d.child(ui::icon(Icon::Warning).size(px(12.)).text_color(theme::warning()))),
                 )
-                .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(first_sentence(tweak.description))),
+                .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(first_sentence(tweak.description))),
         )
         .child(div().flex_none().child(control(tweak, &value, ws, instant, true)))
         .on_click(move |_, _, cx| select_ws.update(cx, |ws, cx| ws.select_tweak(tweak.id, cx)))

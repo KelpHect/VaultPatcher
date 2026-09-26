@@ -53,11 +53,11 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                                     div()
                                         .font_family(theme::font_mono())
                                         .text_size(px(14.))
-                                        .text_color(theme::text_dim())
+                                        .text_color(theme::text_muted())
                                         .child(arg.arg),
                                 ),
                         )
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(arg.description)),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(arg.description)),
                 )
                 .child(
                     ui::toggle(SharedString::from(format!("arg-{i}")), on)

@@ -60,7 +60,7 @@ pub fn render(ws: &Entity<Workspace>, window: &mut Window, cx: &mut App) -> AnyE
                                 .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
                                 .when(current, |d| d.child(ui::badge("Current", theme::success()))),
                         )
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(preset.description))
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(preset.description))
                         .on_mouse_down(gpui::MouseButton::Left, |_, _, _| crate::sound::play(crate::sound::Sound::Click))
                         .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.preset_now(preset, cx))),
                 );

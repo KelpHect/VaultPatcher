@@ -55,7 +55,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         SdkStatus::Installed(v) => (format!("{v} · up to date"), theme::success()),
         SdkStatus::Detected => ("Installed manually".to_string(), theme::success()),
         SdkStatus::Legacy => ("Old PythonSDK".to_string(), theme::warning()),
-        SdkStatus::NotInstalled => ("Not installed".to_string(), theme::text_dim()),
+        SdkStatus::NotInstalled => ("Not installed".to_string(), theme::text_muted()),
     };
     let busy = state.busy.clone();
     let installed = matches!(game.sdk, SdkStatus::Installed(_) | SdkStatus::Detected);
@@ -83,7 +83,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .flex()
                     .flex_col()
                     .child(div().flex().items_center().gap(px(8.)).child(ui::title(support.sdk_name)).child(ui::badge(status_text, status_color)))
-                    .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(
+                    .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(
                         "Adds a MODS menu in-game and runs Python mods. Needs the Visual C++ runtime. Text mods need Text Mod Loader (part of One-Click Setup).",
                     )),
             )
@@ -158,7 +158,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .py(px(10.))
                 .child(ui::icon(Icon::Lock).size(px(15.)).text_color(theme::text_dim()))
                 .child(ui::title(format!("SDK core modules ({core})")))
-                .child(div().text_size(px(12.)).text_color(theme::text_dim()).child("Part of the mod loader; always on.")),
+                .child(div().text_size(px(12.)).text_color(theme::text_muted()).child("Part of the mod loader; always on.")),
         );
     }
     let user_mods: Vec<_> = game.mods.iter().filter(|m| !m.core).collect();
@@ -213,13 +213,13 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .items_center()
                                 .gap(px(8.))
                                 .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child(m.name.clone()))
-                                .when_some(m.version.clone(), |d, v| d.child(div().text_size(px(12.)).text_color(theme::text_dim()).child(format!("v{v}"))))
+                                .when_some(m.version.clone(), |d, v| d.child(div().text_size(px(12.)).text_color(theme::text_muted()).child(format!("v{v}"))))
                                 .child(ui::badge(m.kind.label(), kind_color)),
                         )
                         .child(
                             div()
                                 .text_size(px(12.))
-                                .text_color(theme::text_dim())
+                                .text_color(theme::text_muted())
                                 .truncate()
                                 .child(m.description.clone().unwrap_or_else(|| m.path.display().to_string())),
                         ),

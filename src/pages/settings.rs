@@ -70,7 +70,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .flex()
                     .flex_col()
                     .child(ui::title(title))
-                    .child(div().font_family(theme::font_mono()).text_size(px(12.)).text_color(theme::text_dim()).truncate().child(value)),
+                    .child(div().font_family(theme::font_mono()).text_size(px(12.)).text_color(theme::text_muted()).truncate().child(value)),
             )
             .when_some(path, |d, p| {
                 d.child(
@@ -291,7 +291,7 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
             div()
                 .px(px(16.))
                 .py(px(12.))
-                .child(ui::body("No profiles yet. Save one to switch between looks (e.g. \"Streaming\" and \"Max quality\") or to share your setup.").text_color(theme::text_dim())),
+                .child(ui::body("No profiles yet. Save one to switch between looks (e.g. \"Streaming\" and \"Max quality\") or to share your setup.").text_color(theme::text_muted())),
         );
     }
     for entry in entries {
@@ -316,7 +316,7 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                         .flex()
                         .flex_col()
                         .child(ui::title(entry.name.clone()))
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(format!("{} settings · saved {}", entry.count, entry.created))),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(format!("{} settings · saved {}", entry.count, entry.created))),
                 )
                 .child(
                     ui::button(SharedString::from(format!("pl-{file_name}")), "Load", None, Variant::Secondary)

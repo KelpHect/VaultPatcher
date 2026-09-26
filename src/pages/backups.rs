@@ -91,7 +91,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .py(px(10.))
                 .child(
                     ui::icon(if original { Icon::Star } else { Icon::History })
-                        .text_color(if original { theme::accent_text() } else { theme::text_dim() }),
+                        .text_color(if original { theme::accent_text() } else { theme::text_muted() }),
                 )
                 .child(
                     div()
@@ -106,17 +106,17 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .gap(px(10.))
                                 .items_baseline()
                                 .child(ui::title(b.label.clone()))
-                                .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(b.created_at.clone()))
+                                .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(b.created_at.clone()))
                                 .when(repeats > 1, |d| {
                                     d.child(
                                         div()
                                             .text_size(px(12.))
-                                            .text_color(theme::text_dim())
+                                            .text_color(theme::text_muted())
                                             .child(format!("· newest of {repeats}")),
                                     )
                                 }),
                         )
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(file_list(b))),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(file_list(b))),
                 )
                 .child(
                     ui::button(SharedString::from(format!("bk-restore-{i}")), "Restore", Some(Icon::Undo), Variant::Secondary)

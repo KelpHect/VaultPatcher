@@ -48,7 +48,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 let st = exe.patch_states.get(patch.id).copied().unwrap_or(PatchState::Unsupported);
                 let (status, color) = match st {
                     PatchState::Patched => ("Active", theme::success()),
-                    PatchState::Unpatched => ("Not applied", theme::text_dim()),
+                    PatchState::Unpatched => ("Not applied", theme::text_muted()),
                     PatchState::Unsupported => ("Unsupported exe build", theme::danger()),
                 };
                 let action = match (st, patch.revertible) {
@@ -116,7 +116,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                     )
                                     .child(ui::body(patch.description))
                                     .when_some(patch.note, |d, n| {
-                                        d.child(div().text_size(px(12.)).text_color(theme::text_dim()).child(n))
+                                        d.child(div().text_size(px(12.)).text_color(theme::text_muted()).child(n))
                                     }),
                             )
                             .children(action),

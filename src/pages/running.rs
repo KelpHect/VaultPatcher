@@ -83,7 +83,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         )
         .child(
             ui::button("running-dismiss", "Keep working anyway", None, Variant::Ghost)
-                .text_color(theme::text_dim())
+                .text_color(theme::text_muted())
                 .tooltip(ui::tip("Hide this screen until the game closes"))
                 .on_click(move |_, _, cx| dismiss_ws.update(cx, |ws, cx| ws.dismiss_running_screen(cx))),
         );

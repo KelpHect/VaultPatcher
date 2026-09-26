@@ -232,6 +232,26 @@ pub fn text_dim() -> Rgba {
 pub fn text_disabled() -> Rgba {
     pick(0x0000005c, 0xffffff5d)
 }
+/// TextFillColorInverse: glyphs drawn on a status disc.
+pub fn text_inverse() -> Rgba {
+    pick(0xffffffff, 0x000000e4)
+}
+/// ControlFillColorDisabled.
+pub fn control_disabled() -> Rgba {
+    pick(0xf9f9f94d, 0xffffff0b)
+}
+/// AccentFillColorDisabled.
+pub fn accent_disabled() -> Rgba {
+    pick(0x00000037, 0xffffff28)
+}
+/// TextOnAccentFillColorDisabled.
+pub fn accent_ink_disabled() -> Rgba {
+    pick(0xffffffff, 0xffffff87)
+}
+/// ControlStrongStrokeColorDisabled.
+pub fn ink_disabled() -> Rgba {
+    pick(0x00000037, 0xffffff28)
+}
 
 // ---- accent -------------------------------------------------------------------
 
@@ -547,6 +567,12 @@ pub enum Icon {
     Expand,
     Back,
     Hamburger,
+    /// InfoBar status disc and the glyphs drawn on it.
+    StatusDisc,
+    StatusInfo,
+    StatusSuccess,
+    StatusWarning,
+    StatusError,
 }
 
 impl Icon {
@@ -627,6 +653,11 @@ impl Icon {
             Icon::Expand => 0xE740,
             Icon::Back => 0xE72B,
             Icon::Hamburger => 0xE700,
+            Icon::StatusDisc => 0xF136,
+            Icon::StatusInfo => 0xF13F,
+            Icon::StatusSuccess => 0xF13E,
+            Icon::StatusWarning => 0xF13C,
+            Icon::StatusError => 0xF13D,
         };
         char::from_u32(cp).unwrap_or(' ')
     }

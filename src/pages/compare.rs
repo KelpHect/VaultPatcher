@@ -181,7 +181,7 @@ pub fn inline_viewer(tweak: &'static Tweak, ws: &Entity<Workspace>, width: f32, 
                             })
                             .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover)),
                     )
-                    .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(label.clone()))
+                    .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(label.clone()))
                     .on_click(move |_, _, cx| {
                         if !is_current {
                             ws.update(cx, |ws, cx| ws.set_inline(tweak.id, Some(i), None, cx))
@@ -262,7 +262,7 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
             .items_center()
             .flex_wrap()
             .gap(px(6.))
-            .child(div().w(px(40.)).text_size(px(12.)).text_color(theme::text_dim()).child(if side_right { "Right" } else { "Left" }));
+            .child(div().w(px(40.)).text_size(px(12.)).text_color(theme::text_muted()).child(if side_right { "Right" } else { "Left" }));
         for (i, (label, _)) in images.iter().enumerate() {
             let ws = ws.clone();
             let selected = if side_right { preview.right == i } else { preview.left == i };
@@ -348,7 +348,7 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(theme::text_dim())
+                    .text_color(theme::text_muted())
                     .child("Drag across the image to compare · ← → switch the right side · Esc closes"),
             )
             .into_any_element(),
@@ -458,7 +458,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
         let fraction = if progress.total == 0 { 0. } else { progress.done as f32 / progress.total as f32 };
         run = run
             .child(div().h(px(4.)).w_full().rounded_full().bg(theme::panel_lo()).child(div().h_full().rounded_full().w(relative(fraction)).bg(theme::accent())))
-            .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(if progress.finished {
+            .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(if progress.finished {
                 "Finished. Settings restored.".to_string()
             } else {
                 format!("Shot {} of {}: {}", progress.done + 1, progress.total, progress.current)

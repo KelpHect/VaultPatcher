@@ -145,7 +145,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .items_center()
             .gap(px(12.))
             .pt(px(4.))
-            .child(ui::body("Changed your mind? Everything here can be undone in one go.").flex_1().text_color(theme::text_dim()))
+            .child(ui::body("Changed your mind? Everything here can be undone in one go.").flex_1().text_color(theme::text_muted()))
             .child(
                 ui::button("setup-restore", "Restore vanilla…", Some(Icon::Undo), Variant::Ghost)
                     .tooltip(ui::tip("Remove everything Vault Patcher installed"))
@@ -187,7 +187,7 @@ fn row(
     };
     let note_color = match status {
         Status::Blocked(_) => theme::danger(),
-        _ => theme::text_dim(),
+        _ => theme::text_muted(),
     };
     let id = c.id;
     let toggle_ws = ws.clone();
@@ -214,7 +214,7 @@ fn row(
                         .flex()
                         .flex_col()
                         .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).text_color(if checked { theme::text() } else { theme::text_muted() }).child(c.name))
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(c.summary)),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(c.summary)),
                 )
                 .children(tag)
                 .child(
@@ -250,7 +250,7 @@ fn row(
                         },
                         |d, note| d.child(div().text_size(px(12.)).text_color(note_color).child(note)),
                     )
-                    .when(!needs.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(theme::text_dim()).child(format!("Needs: {}", needs.join(", "))))),
+                    .when(!needs.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(theme::text_muted()).child(format!("Needs: {}", needs.join(", "))))),
             )
         })
 }

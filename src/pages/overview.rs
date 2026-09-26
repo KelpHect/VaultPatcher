@@ -89,7 +89,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         .flex()
                         .flex_col()
                         .child(ui::title(check.title.clone()))
-                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(check.detail.clone())),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(check.detail.clone())),
                 )
                 .children(fix),
         );

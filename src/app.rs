@@ -229,7 +229,7 @@ impl Shell {
                         div()
                             .text_size(px(12.))
                             .line_height(px(16.))
-                            .text_color(if active { theme::text() } else { theme::text_dim() })
+                            .text_color(if active { theme::text() } else { theme::text_muted() })
                             .child("Vault Patcher"),
                     ),
             )
@@ -1224,7 +1224,7 @@ fn status_color(g: &crate::workspace::GameState) -> gpui::Rgba {
     } else if g.config_found() {
         theme::warning()
     } else {
-        theme::text_dim()
+        theme::text_muted()
     }
 }
 

@@ -630,6 +630,15 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Makes the element inert (like HTML `inert`, for disabled controls):
+    /// its hover and pressed styles, click, mouse, key and drag handlers are
+    /// ignored, it's skipped by Tab and shows the default cursor. Tooltips
+    /// still show, so they can explain why.
+    fn inert(mut self, inert: bool) -> Self {
+        self.interactivity().disabled = inert;
+        self
+    }
+
     /// Set index of the tab stop order, and set this node as a tab stop.
     /// This will default the element to being a tab stop. See [`Self::tab_stop`] for more information.
     /// This should only be used in conjunction with `tab_group`
@@ -1537,6 +1546,9 @@ pub struct Interactivity {
     pub(crate) tab_index: Option<isize>,
     pub(crate) tab_group: bool,
     pub(crate) tab_stop: bool,
+    /// Ignores pointer and keyboard input and hover/pressed styles, and
+    /// isn't a tab stop; tooltips still work (to say why).
+    pub(crate) disabled: bool,
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
@@ -1594,6 +1606,7 @@ impl Interactivity {
                 // create a new handle and store it in the element state, which lives for as
                 // as frames contain an element with this id.
                 if self.focusable
+                    && !self.disabled
                     && self.tracked_focus_handle.is_none()
                     && let Some(element_state) = element_state.as_mut()
                 {
@@ -1799,6 +1812,15 @@ impl Interactivity {
         cx: &mut App,
         f: impl FnOnce(&Style, &mut Window, &mut App),
     ) {
+        if self.disabled {
+            self.click_listeners.clear();
+            self.mouse_down_listeners.clear();
+            self.mouse_up_listeners.clear();
+            self.key_down_listeners.clear();
+            self.key_up_listeners.clear();
+            self.drag_listener = None;
+            self.drop_listeners.clear();
+        }
         self.hovered = hitbox.map(|hitbox| hitbox.is_hovered(window));
         window.with_optional_element_state::<InteractiveElementState, _>(
             global_id,
@@ -1826,7 +1848,9 @@ impl Interactivity {
                 if self.tab_group {
                     tab_group = self.tab_index;
                 }
-                if let Some(focus_handle) = &self.tracked_focus_handle {
+                if let Some(focus_handle) = &self.tracked_focus_handle
+                    && !self.disabled
+                {
                     window.next_frame.tab_stops.insert(focus_handle);
                 }
 
@@ -2513,7 +2537,7 @@ impl Interactivity {
             }
         }
 
-        if let Some(hitbox) = hitbox {
+        if let Some(hitbox) = hitbox.filter(|_| !self.disabled) {
             if !cx.has_active_drag() {
                 if let Some(group_hover) = self.group_hover_style.as_ref()
                     && let Some(group_hitbox_id) = GroupHitboxes::get(&group_hover.group, cx)
@@ -2559,7 +2583,11 @@ impl Interactivity {
             }
         }
 
-        if let Some(element_state) = element_state {
+        if self.disabled {
+            style.mouse_cursor = Some(crate::CursorStyle::Arrow);
+        }
+
+        if let Some(element_state) = element_state.filter(|_| !self.disabled) {
             {
                 let clicked_state = element_state
                     .clicked_state

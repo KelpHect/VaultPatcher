@@ -231,6 +231,44 @@ pub fn button(
     icon_glyph: Option<Icon>,
     variant: Variant,
 ) -> Stateful<gpui::Div> {
+    button_if(true, id, text, icon_glyph, variant)
+}
+
+/// [`button`] that is disabled unless `enabled`: WinUI's disabled fills and
+/// text, no hover or press, no clicks or Tab stop. Tooltips still show.
+pub fn button_if(
+    enabled: bool,
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    icon_glyph: Option<Icon>,
+    variant: Variant,
+) -> Stateful<gpui::Div> {
+    if !enabled {
+        let (bg, fg, border): (Rgba, Rgba, Rgba) = match variant {
+            Variant::Primary => (theme::accent_disabled(), theme::accent_ink_disabled(), gpui::transparent_black().into()),
+            Variant::Secondary => (theme::control_disabled(), theme::text_disabled(), theme::control_stroke()),
+            Variant::Ghost => (gpui::transparent_black().into(), theme::text_disabled(), gpui::transparent_black().into()),
+        };
+        return div()
+            .id(id.into())
+            .inert(true)
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .h(px(32.))
+            .px(px(12.))
+            .rounded(px(theme::RADIUS))
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .text_color(fg)
+            .text_size(px(14.))
+            .line_height(px(20.))
+            .when_some(icon_glyph, |d, i| d.child(icon(i).text_color(fg)))
+            .child(text.into());
+    }
     let transparent: Rgba = gpui::transparent_black().into();
     let (bg, fg, hover, pressed, border) = match variant {
         Variant::Primary => (theme::accent(), theme::accent_ink(), theme::accent_hi(), theme::accent_pressed(), transparent),
@@ -259,6 +297,23 @@ pub fn button(
         .when_some(icon_glyph, |d, i| d.child(icon(i).text_color(fg)))
         .child(text.into())
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
+}
+
+/// [`icon_button`] that is disabled unless `enabled`.
+pub fn icon_button_if(enabled: bool, id: impl Into<ElementId>, glyph: Icon, color: Rgba) -> Stateful<gpui::Div> {
+    if enabled {
+        return icon_button(id, glyph, color);
+    }
+    div()
+        .id(id.into())
+        .inert(true)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(32.))
+        .rounded(px(theme::RADIUS))
+        .child(icon(glyph).text_color(theme::text_disabled()))
 }
 
 /// A square icon-only subtle button (toolbars, list actions). Give it a tooltip.
@@ -292,34 +347,85 @@ pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> g
 
 // ---- selection controls ---------------------------------------------------------
 
-/// ToggleSwitch (40×20). The knob slides when the user flips it.
+/// ToggleSwitch: "On"/"Off" then the 40×20 track, the whole thing clickable.
+/// The knob is 12px, 14 on hover, stretches to 17×14 while pressed, and
+/// slides over 367 ms when flipped.
 pub fn toggle(id: impl Into<SharedString>, on: bool) -> Stateful<gpui::Div> {
+    toggle_if(true, id, on)
+}
+
+/// [`toggle`] that is disabled unless `enabled`.
+pub fn toggle_if(enabled: bool, id: impl Into<SharedString>, on: bool) -> Stateful<gpui::Div> {
     let id: SharedString = id.into();
-    let knob = div().absolute().top(px(3.)).size(px(12.)).rounded_full().bg(if on { theme::accent_ink() } else { theme::text_muted() });
-    // Knob travel is 20px between 3px insets of the 40px track (inside its border).
-    let knob: AnyElement = if changed_recently(&id) {
+    let group = SharedString::from(format!("{id}-toggle"));
+    let knob_color = match (enabled, on) {
+        (true, true) => theme::accent_ink(),
+        (true, false) => theme::text_muted(),
+        (false, true) => theme::accent_ink_disabled(),
+        (false, false) => theme::text_disabled(),
+    };
+    // The knob sits 3px in from the track's inner edge; travel is 20px.
+    let rest = |on: bool| if on { 23. } else { 3. };
+    let knob = div()
+        .id(SharedString::from(format!("{id}-knob")))
+        .absolute()
+        .top(px(3.))
+        .size(px(12.))
+        .rounded(px(6.))
+        .bg(knob_color)
+        .when(enabled, |d| {
+            d.group_hover(group.clone(), |s| s.size(px(14.)).top(px(2.)).ml(px(-1.)))
+                .group_active(group.clone(), |s| s.w(px(17.)).h(px(14.)).top(px(2.)).ml(px(if on { -4. } else { -1. })))
+        });
+    let knob: AnyElement = if enabled && changed_recently(&id) {
         knob.with_animation(
             ElementId::Name(format!("{id}-knob-{on}").into()),
-            Animation::new(Duration::from_millis(367)).with_easing(ease_decelerate()),
-            move |d, t| d.left(px(if on { 3. + 20. * t } else { 23. - 20. * t })),
+            Animation::new(Duration::from_millis(367)).with_easing(ease_entrance()),
+            move |d, t| d.left(px(rest(!on) + (rest(on) - rest(!on)) * t)),
         )
         .into_any_element()
     } else {
-        knob.left(px(if on { 23. } else { 3. })).into_any_element()
+        knob.left(px(rest(on))).into_any_element()
+    };
+    let (track, stroke) = match (enabled, on) {
+        (true, true) => (theme::accent(), theme::accent()),
+        (true, false) => (theme::control_alt(), theme::ink()),
+        (false, true) => (theme::accent_disabled(), theme::accent_disabled()),
+        (false, false) => (gpui::transparent_black().into(), theme::ink_disabled()),
     };
     let mark_id = id.clone();
-    focusable(div().id(ElementId::Name(id)))
-        .relative()
+    let wrap = div().id(ElementId::Name(id)).group(group.clone());
+    let wrap = if enabled { focusable(wrap) } else { wrap.inert(true) };
+    wrap.flex()
         .flex_none()
-        .w(px(40.))
-        .h(px(20.))
-        .rounded_full()
-        .bg(if on { theme::accent() } else { theme::control_alt() })
-        .border_1()
-        .border_color(if on { theme::accent() } else { theme::ink() })
-        .cursor_pointer()
-        .hover(move |s| if on { s.bg(theme::accent_hi()) } else { s.bg(theme::control_hover()) })
-        .child(knob)
+        .items_center()
+        .gap(px(12.))
+        .h(px(32.))
+        .rounded(px(theme::RADIUS))
+        .when(enabled, |d| d.cursor_pointer())
+        .child(
+            div()
+                .min_w(px(24.))
+                .text_size(px(14.))
+                .line_height(px(20.))
+                .text_color(if enabled { theme::text() } else { theme::text_disabled() })
+                .child(if on { "On" } else { "Off" }),
+        )
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .w(px(40.))
+                .h(px(20.))
+                .rounded_full()
+                .bg(track)
+                .border_1()
+                .border_color(stroke)
+                .when(enabled, |d| {
+                    d.group_hover(group.clone(), move |s| if on { s.bg(theme::accent_hi()) } else { s.bg(theme::panel_hi()) })
+                })
+                .child(knob),
+        )
         .on_mouse_down(MouseButton::Left, move |_, _, _| {
             mark_changed(&mark_id);
             sound::play(Sound::Click)
@@ -731,6 +837,69 @@ pub fn segmented(items: Vec<(SharedString, SharedString, bool)>) -> (gpui::Div, 
         })
         .collect();
     (wrap, segments)
+}
+
+/// InfoBar: the status disc glyph, a bold title and a wrapping message on the
+/// severity background. Add an action button with `.child(..)`.
+pub fn info_bar(severity: Severity, title: impl Into<SharedString>, message: impl Into<SharedString>) -> gpui::Div {
+    let (bg, color, _) = severity.style();
+    let glyph = match severity {
+        Severity::Info => Icon::StatusInfo,
+        Severity::Success => Icon::StatusSuccess,
+        Severity::Warning => Icon::StatusWarning,
+        Severity::Error => Icon::StatusError,
+    };
+    div()
+        .flex()
+        .items_start()
+        .gap(px(12.))
+        .min_h(px(48.))
+        .px(px(16.))
+        .py(px(12.))
+        .rounded(px(theme::RADIUS))
+        .border_1()
+        .border_color(theme::card_stroke())
+        .bg(bg)
+        .child(
+            div()
+                .relative()
+                .size(px(16.))
+                .flex_none()
+                .mt(px(2.))
+                .child(icon(Icon::StatusDisc).absolute().inset_0().text_color(color))
+                .child(icon(glyph).absolute().inset_0().text_color(theme::text_inverse())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(div().text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title.into()))
+                .child(div().text_size(px(14.)).line_height(px(20.)).text_color(theme::text()).child(message.into())),
+        )
+}
+
+/// WinUI ProgressBar: a 3px bar over a 1px track. `None` is indeterminate:
+/// a segment sweeping across every 2 s.
+pub fn progress_bar(id: impl Into<SharedString>, fraction: Option<f32>, color: Rgba) -> AnyElement {
+    let track = div().relative().w_full().h(px(3.)).flex().items_center().child(div().w_full().h(px(1.)).bg(theme::ink()));
+    let bar = |d: gpui::Div| d.absolute().top_0().h(px(3.)).rounded(px(1.5)).bg(color);
+    match fraction {
+        Some(f) => track.child(bar(div()).left_0().w(relative(f.clamp(0., 1.)))).into_any_element(),
+        None if !theme::motion() => track.child(bar(div()).left(relative(0.3)).w(relative(0.4))).into_any_element(),
+        None => {
+            let id: SharedString = id.into();
+            track
+                .overflow_hidden()
+                .child(bar(div()).w(relative(0.4)).with_animation(
+                    ElementId::Name(id),
+                    Animation::new(Duration::from_secs(2)).repeat().with_easing(ease_entrance()),
+                    |d, t| d.left(relative(-0.4 + 1.4 * t)),
+                ))
+                .into_any_element()
+        }
+    }
 }
 
 /// Indeterminate ProgressRing: an accent arc that grows, shrinks and spins.
