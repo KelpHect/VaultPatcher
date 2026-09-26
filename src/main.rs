@@ -1,6 +1,10 @@
 // Hide the console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Windows and Linux only; the vendored gpui fork carries no macOS backend.
+#[cfg(target_os = "macos")]
+compile_error!("Vault Patcher doesn't support macOS (Windows and Linux only).");
+
 mod app;
 mod applied;
 mod cli;

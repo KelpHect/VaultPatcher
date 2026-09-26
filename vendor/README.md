@@ -3,7 +3,8 @@
 `gpui` 0.2.2 and `gpui-component` 0.5.1, copied from crates.io and patched in
 via `[patch.crates-io]` in the root `Cargo.toml`. Both are Apache-2.0 (see each
 crate's `LICENSE-APACHE`). Upstream examples, tests and docs were dropped to
-keep the repo small.
+keep the repo small. macOS is not supported: the Metal backend
+(`platform/mac`) was removed, and the app refuses to build there.
 
 Changes are kept small and marked with doc comments, so they can be reapplied
 on a newer upstream or offered back. When upgrading, diff against the pristine
@@ -30,8 +31,6 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
     blending, so the replace is two draws per backdrop: scale the frame by
     `1 - coverage`, then add the blurred color times coverage. Targets are
     created on first use and dropped on resize.
-  - Metal (macOS) skips backdrops for now; elements keep their translucent
-    fill.
 - **Scale transforms**: `Styled::transform_scale(f32)` /
   `Window::with_element_scale(origin, scale, f)`. Every primitive goes through
   `Window::insert_primitive`, which applies the current `ElementTransform`

@@ -343,29 +343,94 @@ impl Render for EmptyView {
     }
 }
 
-/// Slider: 4px rail, 18px thumb with an accent core. `fraction` is the current
-/// position in `0..=1` and `on_change` receives the new fraction on click or drag.
+thread_local! {
+    /// Where each slider's thumb is while it's being dragged, by slider id.
+    /// The value is only committed when the drag ends.
+    static SLIDER_PREVIEW: RefCell<Vec<(SharedString, f32)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn set_preview(id: &SharedString, fraction: Option<f32>) {
+    SLIDER_PREVIEW.with(|p| {
+        let mut p = p.borrow_mut();
+        p.retain(|(i, _)| i != id);
+        if let Some(f) = fraction {
+            p.push((id.clone(), f));
+        }
+    });
+}
+
+/// The fraction a slider is being dragged to, if it's being dragged now.
+pub fn slider_preview(id: &str) -> Option<f32> {
+    SLIDER_PREVIEW.with(|p| p.borrow().iter().find(|(i, _)| i == id).map(|(_, f)| *f))
+}
+
+/// What a slider shows and how it moves.
+pub struct SliderSpec {
+    pub id: SharedString,
+    /// Current position in `0..=1`.
+    pub fraction: f32,
+    /// Number of steps between the ends, for snapping and the keyboard;
+    /// tick marks show when there are few.
+    pub steps: Option<u32>,
+    /// Where the game's default sits, drawn as a notch on the rail.
+    pub default: Option<f32>,
+    pub accent: Rgba,
+}
+
+/// WinUI Slider: a 4px rail with an 18px thumb (its accent core grows on
+/// hover, shrinks while pressed), tick marks for coarse steps, a notch at the
+/// default, and the value in a tooltip above the thumb while dragging.
+/// Dragging previews live; `on_commit` receives the snapped fraction once,
+/// on release. Arrow keys step, Page Up/Down move ten steps, Home/End jump
+/// to the ends. `format` labels a fraction for the tooltip.
 pub fn slider(
-    id: impl Into<SharedString>,
-    fraction: f32,
-    accent: Rgba,
-    on_change: impl Fn(f32, &mut Window, &mut App) + 'static,
+    spec: SliderSpec,
+    format: impl Fn(f32) -> SharedString + 'static,
+    on_commit: impl Fn(f32, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let id: SharedString = id.into();
-    let fraction = fraction.clamp(0., 1.);
+    let SliderSpec { id, fraction, steps, default, accent } = spec;
+    let steps = steps.filter(|s| *s > 0);
+    let snap = move |f: f32| -> f32 {
+        let f = f.clamp(0., 1.);
+        match steps {
+            Some(n) => (f * n as f32).round() / n as f32,
+            None => f,
+        }
+    };
+    let dragging = slider_preview(&id);
+    let shown = snap(dragging.unwrap_or(fraction));
     let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
-    let on_change = Rc::new(on_change);
-    let to_fraction = |x: Pixels, b: Bounds<Pixels>| -> f32 {
+    let on_commit = Rc::new(on_commit);
+    let to_fraction = move |x: Pixels, b: Bounds<Pixels>| -> f32 {
         if b.size.width <= px(0.) {
             return 0.;
         }
-        ((x - b.left()) / b.size.width).clamp(0., 1.)
+        snap((x - b.left()) / b.size.width)
     };
 
-    let drag_id = id.clone();
     let bounds_for_canvas = bounds.clone();
-    let on_down = on_change.clone();
     let bounds_for_down = bounds.clone();
+    let (down_id, move_id, up_id, out_id, key_id) = (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
+    let (commit_up, commit_out, commit_key) = (on_commit.clone(), on_commit.clone(), on_commit);
+    let end_drag = move |id: &SharedString, commit: &Rc<dyn Fn(f32, &mut Window, &mut App)>, window: &mut Window, cx: &mut App| {
+        if let Some(f) = slider_preview(id) {
+            set_preview(id, None);
+            commit(f, window, cx);
+            window.refresh();
+        }
+    };
+    let end_up = end_drag.clone();
+    let commit_up: Rc<dyn Fn(f32, &mut Window, &mut App)> = commit_up;
+    let commit_out: Rc<dyn Fn(f32, &mut Window, &mut App)> = commit_out;
+
+    // Tick marks under the rail when there are few enough to read.
+    let ticks = steps.filter(|n| *n <= 12).map(|n| {
+        let mut row = div().absolute().left(px(9.)).right(px(9.)).top(px(22.)).h(px(4.));
+        for i in 0..=n {
+            row = row.child(div().absolute().left(relative(i as f32 / n as f32)).ml(px(-0.5)).w(px(1.)).h_full().bg(theme::ink()));
+        }
+        row
+    });
 
     div()
         .id(ElementId::Name(id.clone()))
@@ -375,48 +440,114 @@ pub fn slider(
         .min_w(px(120.))
         .h(px(32.))
         .cursor_pointer()
-        .child(
-            canvas(move |b, _, _| bounds_for_canvas.set(b), |_, _, _, _| {})
-                .absolute()
-                .size_full(),
-        )
+        .tab_index(0)
+        .focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(1.), Some(theme::focus_stroke_inner().into())))
+        .rounded(px(theme::RADIUS))
+        .child(canvas(move |b, _, _| bounds_for_canvas.set(b), |_, _, _, _| {}).absolute().size_full())
+        // The rail spans between the thumb's centers at either end.
         .child(
             div()
                 .absolute()
-                .left_0()
-                .right_0()
+                .left(px(9.))
+                .right(px(9.))
                 .top(px(14.))
                 .h(px(4.))
                 .rounded(px(2.))
                 .bg(theme::ink())
-                .child(div().h_full().rounded(px(2.)).w(relative(fraction)).bg(accent)),
+                .child(div().h_full().rounded(px(2.)).w(relative(shown)).bg(accent))
+                .when_some(default, |d, f| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(relative(f.clamp(0., 1.)))
+                            .ml(px(-1.))
+                            .top(px(-3.))
+                            .w(px(2.))
+                            .h(px(10.))
+                            .rounded(px(1.))
+                            .bg(theme::text_dim()),
+                    )
+                }),
         )
+        .children(ticks)
         .child(
-            div()
-                .absolute()
-                .top(px(7.))
-                .left(relative(fraction))
-                .ml(px(-9.))
-                .size(px(18.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(theme::control_solid())
-                .border_1()
-                .border_color(theme::control_stroke())
-                .shadow(theme::shadow_card())
-                .child(div().size(px(12.)).rounded_full().bg(accent).group_hover(id.clone(), |s| s.size(px(14.)))),
+            div().absolute().left(px(9.)).right(px(9.)).top(px(7.)).h(px(18.)).child(
+                div()
+                    .absolute()
+                    .left(relative(shown))
+                    .ml(px(-9.))
+                    .size(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(theme::control_solid())
+                    .border_1()
+                    .border_color(theme::control_stroke())
+                    .shadow(theme::shadow_card())
+                    .child(
+                        div()
+                            .size(px(if dragging.is_some() { 10. } else { 12. }))
+                            .rounded_full()
+                            .bg(accent)
+                            .when(dragging.is_none(), |d| d.group_hover(id.clone(), |s| s.size(px(14.)))),
+                    )
+                    // The value, above the thumb, while dragging.
+                    .when(dragging.is_some(), |d| {
+                        d.child(
+                            div().absolute().bottom(px(26.)).left(px(-40.)).w(px(98.)).flex().justify_center().child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .rounded(px(theme::RADIUS))
+                                    .backdrop_blur(px(theme::ACRYLIC_BLUR))
+                                    .bg(theme::acrylic())
+                                    .border_1()
+                                    .border_color(theme::flyout_stroke())
+                                    .shadow(theme::shadow())
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme::text())
+                                    .whitespace_nowrap()
+                                    .child(format(shown)),
+                            ),
+                        )
+                    }),
+            ),
         )
-        .on_mouse_down(MouseButton::Left, move |ev, window, cx| {
+        .on_mouse_down(MouseButton::Left, move |ev, window, _| {
             let f = to_fraction(ev.position.x, bounds_for_down.get());
-            on_down(f, window, cx);
+            set_preview(&down_id, Some(f));
+            window.refresh();
         })
-        .on_drag(SliderDrag(drag_id.clone()), |_, _, _, cx| cx.new(|_| EmptyView))
+        .on_drag(SliderDrag(move_id.clone()), |_, _, _, cx| cx.new(|_| EmptyView))
         .on_drag_move::<SliderDrag>(move |ev, window, cx| {
-            if ev.drag(cx).0 == drag_id {
+            if ev.drag(cx).0 == move_id {
                 let f = to_fraction(ev.event.position.x, ev.bounds);
-                on_change(f, window, cx);
+                if slider_preview(&move_id) != Some(f) {
+                    set_preview(&move_id, Some(f));
+                    window.refresh();
+                }
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, window, cx| end_up(&up_id, &commit_up, window, cx))
+        .on_mouse_up_out(MouseButton::Left, move |_, window, cx| end_drag(&out_id, &commit_out, window, cx))
+        .on_key_down(move |ev, window, cx| {
+            let unit = steps.map_or(0.01, |n| 1. / n as f32);
+            let target = match ev.keystroke.key.as_str() {
+                "left" | "down" => shown - unit,
+                "right" | "up" => shown + unit,
+                "pagedown" => shown - unit * 10.,
+                "pageup" => shown + unit * 10.,
+                "home" => 0.,
+                "end" => 1.,
+                _ => return,
+            };
+            cx.stop_propagation();
+            let target = snap(target);
+            if target != shown {
+                mark_changed(&key_id);
+                commit_key(target, window, cx);
             }
         })
         .into_any_element()

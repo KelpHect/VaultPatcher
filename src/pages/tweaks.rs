@@ -458,45 +458,70 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
                 Value::Num(n) => *n,
                 _ => tweak.default.to_value().as_num().unwrap_or(min),
             };
-            let fraction = ((n - min) / (max - min)) as f32;
+            let span = (max - min).max(f64::EPSILON);
+            let to_value = move |f: f32| tweak.clamp(Value::Num(min + span * f as f64));
+            let slider_id = SharedString::from(format!("s-{}-{compact}", tweak.id));
+            // While dragging, the readout follows the thumb.
+            let shown = ui::slider_preview(&slider_id).map(to_value).unwrap_or_else(|| value.clone());
+            let default = tweak.default.to_value();
+            let steps = (step > 0.).then(|| (span / step).round()).filter(|s| *s >= 1. && *s <= 1000.).map(|s| s as u32);
             let slide_ws = ws.clone();
             let minus_ws = ws.clone();
             let plus_ws = ws.clone();
+            let reset_ws = ws.clone();
             let readout = div()
-                .w(px(64.))
-                .h(px(24.))
+                .min_w(px(64.))
+                .h(px(32.))
+                .px(px(8.))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded(px(theme::RADIUS))
-                .bg(theme::panel_lo())
+                .bg(theme::control())
                 .border_1()
-                .border_color(theme::line())
-                .font_family(theme::font_mono())
-                .text_size(px(12.))
+                .border_color(theme::control_stroke())
+                .text_size(px(14.))
                 .text_color(theme::text())
-                .child(value.display(&tweak.control));
+                .child(shown.display(&tweak.control));
+            let spec = ui::SliderSpec {
+                id: slider_id,
+                fraction: ((n - min) / span) as f32,
+                steps,
+                default: default.as_num().map(|d| ((d - min) / span) as f32),
+                accent: theme::accent(),
+            };
             div()
                 .id(SharedString::from(format!("sw-{}-{compact}", tweak.id)))
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .when(compact, |d| d.w(px(210.)))
+                .when(compact, |d| d.w(px(220.)))
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .child(ui::slider(format!("s-{}-{compact}", tweak.id), fraction, theme::accent(), move |f, _, cx| {
-                    let v = min + (max - min) * f as f64;
-                    slide_ws.update(cx, |ws, cx| commit(ws, tweak, Value::Num(v), instant, cx));
-                }))
+                .child(ui::slider(
+                    spec,
+                    move |f| to_value(f).display(&tweak.control).into(),
+                    move |f, _, cx| slide_ws.update(cx, |ws, cx| commit(ws, tweak, to_value(f), instant, cx)),
+                ))
                 .child(readout)
                 .when(!compact, |d| {
                     d.child(
                         ui::icon_button(SharedString::from(format!("m-{}", tweak.id)), Icon::Minus, theme::text_muted())
-                            .on_click(move |_, _, cx| minus_ws.update(cx, |ws, cx| commit(ws, tweak, Value::Num(n - step), instant, cx))),
+                            .tooltip(ui::tip("One step down"))
+                            .on_click(move |_, _, cx| minus_ws.update(cx, |ws, cx| commit(ws, tweak, tweak.clamp(Value::Num(n - step)), instant, cx))),
                     )
                     .child(
                         ui::icon_button(SharedString::from(format!("p-{}", tweak.id)), Icon::Add, theme::text_muted())
-                            .on_click(move |_, _, cx| plus_ws.update(cx, |ws, cx| commit(ws, tweak, Value::Num(n + step), instant, cx))),
+                            .tooltip(ui::tip("One step up"))
+                            .on_click(move |_, _, cx| plus_ws.update(cx, |ws, cx| commit(ws, tweak, tweak.clamp(Value::Num(n + step)), instant, cx))),
                     )
+                    .when(*value != default, |d| {
+                        let label = default.display(&tweak.control);
+                        d.child(
+                            ui::icon_button(SharedString::from(format!("r-{}", tweak.id)), Icon::Undo, theme::text_muted())
+                                .tooltip(ui::tip(format!("Back to the game's default ({label})")))
+                                .on_click(move |_, _, cx| reset_ws.update(cx, |ws, cx| commit(ws, tweak, default.clone(), instant, cx))),
+                        )
+                    })
                 })
                 .into_any_element()
         }
