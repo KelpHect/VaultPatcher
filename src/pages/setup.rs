@@ -7,7 +7,7 @@ use super::{confirm, game_banner, missing_notice};
 use crate::setup::{Component, Group, Status};
 use crate::theme::{self, Icon};
 use crate::ui::{self, Variant};
-use crate::workspace::{StepState, Workspace};
+use crate::workspace::{SetupGoal, StepState, Workspace};
 
 const GROUPS: [Group; 4] = [Group::Essentials, Group::Performance, Group::Fixes, Group::Mods];
 
@@ -36,6 +36,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     } else {
         format!("Upgrade game ({to_install})")
     };
+    let reapply_ws = ws.clone();
     let mut actions = vec![
         ui::button("setup-patch", cta, Some(if done { Icon::CheckCircle } else { Icon::Rocket }), if done { Variant::Secondary } else { Variant::Primary })
             .h(px(36.))
@@ -44,7 +45,20 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .tooltip(ui::tip(if done { "Everything you ticked is installed" } else { "Installs everything ticked below. Every change is backed up." }))
             .on_click(move |_, _, cx| {
                 if !done {
-                    patch_ws.update(cx, |ws, cx| ws.run_setup(false, cx))
+                    patch_ws.update(cx, |ws, cx| ws.run_setup(SetupGoal::Install, cx))
+                }
+            })
+            .into_any_element(),
+        ui::button("setup-reapply", "Re-apply all", Some(Icon::Refresh), Variant::Secondary)
+            .h(px(36.))
+            .px(px(16.))
+            .when(running, |b| b.opacity(0.6))
+            .tooltip(ui::tip(
+                "The game or its launcher rewrote your settings? Puts back every Vault Patcher setting and upgrade.",
+            ))
+            .on_click(move |_, _, cx| {
+                if !running {
+                    reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx))
                 }
             })
             .into_any_element(),
@@ -54,7 +68,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             ui::button("setup-play", "Play", Some(Icon::Play), if done { Variant::Primary } else { Variant::Secondary })
                 .h(px(36.))
                 .px(px(16.))
-                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch(cx)))
+                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx)))
                 .into_any_element(),
         );
     }
@@ -74,10 +88,19 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .collect();
         let (text, color, fraction) = if !run.finished {
             let current = run.steps.iter().find(|(_, s)| *s == StepState::Running).and_then(|(id, _)| def.component(id)).map(|c| c.name).unwrap_or("Preparing");
-            let verb = if run.uninstall { "Removing" } else { "Installing" };
+            let verb = match run.goal {
+                SetupGoal::Uninstall => "Removing",
+                SetupGoal::Install => "Installing",
+                SetupGoal::Reapply => "Re-applying",
+            };
             (format!("{verb} {current}… ({finished_steps}/{})", run.steps.len()), theme::accent(), finished_steps as f32 / run.steps.len().max(1) as f32)
         } else if failed.is_empty() {
-            (if run.uninstall { "Restored to vanilla.".to_string() } else { "Done. Everything installed.".to_string() }, theme::success(), 1.)
+            let text = match run.goal {
+                SetupGoal::Uninstall => "Restored to vanilla.",
+                SetupGoal::Reapply => "Done. Everything's back in place.",
+                SetupGoal::Install => "Done. Everything installed.",
+            };
+            (text.to_string(), theme::success(), 1.)
         } else {
             (format!("{} step(s) didn't finish", failed.len()), theme::danger(), 1.)
         };
@@ -134,7 +157,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                             "Restore the vanilla game?",
                             "Removes every upgrade Vault Patcher installed and puts the affected settings back to the game's defaults. Your saves and your own mods aren't touched.",
                             "Restore",
-                            move |cx| ws.update(cx, |ws, cx| ws.run_setup(true, cx)),
+                            move |cx| ws.update(cx, |ws, cx| ws.run_setup(SetupGoal::Uninstall, cx)),
                         );
                     }),
             ),

@@ -107,6 +107,9 @@ pub struct GameDef {
     pub epic_names: &'static [&'static str],
     /// Executable path relative to the install root.
     pub exe: &'static str,
+    /// A separate first-run menu the game ships with (BL2/TPS's Launcher.exe)
+    /// — it rewrites its own copy of the video keys on every run.
+    pub launcher: Option<&'static LauncherDef>,
     /// Config folder relative to `Documents\My Games`.
     pub config_subdir: &'static str,
     /// Logical file id -> file name inside the config folder.
@@ -130,6 +133,16 @@ pub struct GameDef {
     pub comparisons: &'static [crate::compare::Comparison],
     /// How the comparison capture tool runs this game (None: not supported).
     pub capture: Option<&'static crate::compare::CaptureProfile>,
+}
+
+/// The separate launcher program a game ships with, sitting next to the
+/// game exe.
+#[derive(Clone, Copy)]
+pub struct LauncherDef {
+    /// Launcher exe, relative to the install root.
+    pub exe: &'static str,
+    /// The game-exe switch that skips the launcher for one run.
+    pub skip_arg: &'static str,
 }
 
 /// A command-line switch offered on the Launch page.

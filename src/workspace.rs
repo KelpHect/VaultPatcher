@@ -29,6 +29,8 @@ pub struct AppSettings {
     pub lock_configs_after_apply: bool,
     /// Launch switches the user ticked, per game.
     pub launch_args: HashMap<String, Vec<String>>,
+    /// Which way the Play button starts each game, picked in its dropdown.
+    pub launch_mode: HashMap<String, LaunchMode>,
     pub max_backups: Option<usize>,
     pub mode: Mode,
     pub palette: crate::theme::Palette,
@@ -90,11 +92,39 @@ pub enum StepState {
     Failed(String),
 }
 
-/// Progress of a Simple-mode setup (or restore) run.
+/// How the Play button starts the game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    /// The game exe with the user's configured launch options.
+    Normal,
+    /// The game exe, forcing the skip-launcher switch for this run —
+    /// so the launcher can't re-apply its copy of the video settings.
+    Direct,
+    /// The game's own launcher program (BL2/TPS's Launcher.exe).
+    Launcher,
+}
+
+/// What a setup run is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupGoal {
+    /// Install the selected components that aren't active yet.
+    Install,
+    /// Remove every component Vault Patcher installed.
+    Uninstall,
+    /// Put back everything Vault Patcher wrote: settings the game or its
+    /// launcher rewrote, exe patches a file check reverted, missing files.
+    Reapply,
+}
+
+/// Progress of a Simple-mode setup (or restore, or re-apply) run.
 pub struct SetupRun {
-    pub uninstall: bool,
+    pub goal: SetupGoal,
     pub steps: Vec<(&'static str, StepState)>,
     pub finished: bool,
+    /// Re-apply runs: a snapshot of the written-state record, taken before
+    /// the component steps so their own writes can't water it down.
+    pub remembered: Option<crate::applied::Applied>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +190,8 @@ pub struct GameState {
     running_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
     /// Saved profiles, re-read when they change.
     pub profiles: Vec<crate::profiles::Entry>,
+    /// What Vault Patcher last wrote, for "Re-apply" (see `applied.rs`).
+    pub applied: crate::applied::Applied,
 }
 
 impl GameState {
@@ -179,6 +211,7 @@ impl GameState {
             status_cache: Default::default(),
             running_cache: Default::default(),
             profiles: crate::profiles::list(def.id),
+            applied: crate::applied::load(def.id),
         }
     }
 
@@ -335,21 +368,23 @@ impl Workspace {
         ws
     }
 
-    /// Downloads published comparison images for games that don't have
-    /// them yet. Silent if nothing is published or there's no network.
+    /// Installs comparison images a game is missing — bundled sets are copied
+    /// out of the exe, anything else falls back to the published zip — then
+    /// makes the small preview copies. Silent if there's nothing to add.
     fn fetch_comparison_packs(&mut self, cx: &mut Context<Self>) {
-        let missing: Vec<&'static str> = self
-            .games
-            .iter()
-            .filter(|g| !g.def.comparisons.is_empty() && !crate::compare::has_local_images(g.def.id))
-            .map(|g| g.def.id)
-            .collect();
         let all: Vec<&'static str> = self.games.iter().filter(|g| !g.def.comparisons.is_empty()).map(|g| g.def.id).collect();
         let task = cx.background_executor().spawn(async move {
-            let downloaded = missing.iter().filter(|id| crate::compare::download_pack(id).is_ok()).count();
+            let mut added = 0;
+            for id in &all {
+                added += crate::compare::extract_pack(id);
+                // Games whose set isn't bundled still try the download.
+                if !crate::compare::has_local_images(id) {
+                    added += crate::compare::download_pack(id).unwrap_or(0);
+                }
+            }
             // Small copies for the settings pages (only missing ones are made).
-            let previews: usize = all.iter().map(|id| crate::compare::make_previews(id)).sum();
-            downloaded + previews
+            added += all.iter().map(|id| crate::compare::make_previews(id)).sum::<usize>();
+            added
         });
         cx.spawn(async move |this, cx| {
             if task.await > 0 {
@@ -500,6 +535,7 @@ impl Workspace {
             }
         }
         game.backups = backup::list(def.id);
+        game.applied = crate::applied::load(def.id);
     }
 
     pub fn refresh_active(&mut self, cx: &mut Context<Self>) {
@@ -844,10 +880,24 @@ impl Workspace {
         if !game.backups.iter().any(|b| b.label == backup::ORIGINAL_LABEL) {
             backup::create(def.id, backup::ORIGINAL_LABEL, &existing).context("saving your original settings")?;
         }
+        // What every tweak reads before the edit, so afterwards we know
+        // which values this write actually changed — those are remembered
+        // for "Re-apply".
+        let before: Vec<Option<Value>> = def.visible_tweaks().map(|t| t.read(&config)).collect();
         edit(&mut config);
+        let changed: Vec<(&'static str, Option<Value>)> = def
+            .visible_tweaks()
+            .zip(before.iter())
+            .filter_map(|(t, was)| {
+                let now = t.read(&config);
+                (now != *was).then_some((t.id, now))
+            })
+            .collect();
         let dirty = config.dirty_paths();
         if dirty.is_empty() {
             game.config = config;
+            crate::applied::record(def.id, &changed);
+            game.applied = crate::applied::load(def.id);
             return Ok(());
         }
         let recent = game.backups.first().is_some_and(|b| {
@@ -864,6 +914,8 @@ impl Workspace {
         game.invalidate_statuses();
         game.backups = backup::list(def.id);
         let written = written?;
+        crate::applied::record(def.id, &changed);
+        game.applied = crate::applied::load(def.id);
         if lock {
             for path in &written {
                 backup::set_readonly(path, true)?;
@@ -1085,24 +1137,43 @@ impl Workspace {
     }
 
     /// Installs the selected components that aren't active yet (in list
-    /// order), or with `uninstall` removes every active component.
-    pub fn run_setup(&mut self, uninstall: bool, cx: &mut Context<Self>) {
+    /// order); with `Uninstall` removes every active component, and with
+    /// `Reapply` puts back what was installed and rewrites remembered
+    /// settings and exe patches.
+    pub fn run_setup(&mut self, goal: SetupGoal, cx: &mut Context<Self>) {
         if self.setup_running() {
             return;
         }
         let game = self.game();
         let def = game.def;
+        let launch_args = self.launch_args();
         let wanted = |c: &setup::Component| {
             let status = self.component_status(c);
-            if uninstall {
+            match goal {
                 // Only undo what Vault Patcher itself installed or applied.
-                setup::installed_by_us(c, game, &self.launch_args())
-            } else {
-                game.setup_selected.contains(c.id) && !status.is_active() && !matches!(status, Status::Blocked(_))
+                SetupGoal::Uninstall => setup::installed_by_us(c, game, &launch_args),
+                SetupGoal::Install => {
+                    game.setup_selected.contains(c.id) && !status.is_active() && !matches!(status, Status::Blocked(_))
+                }
+                SetupGoal::Reapply => match c.kind {
+                    // "Installed" goes stale behind our back (the game's
+                    // launcher rewrites its copy of the video keys), so a
+                    // settings bundle is re-written whenever it's still
+                    // supposed to be applied.
+                    ComponentKind::Settings { .. } => {
+                        !matches!(status, Status::Blocked(_))
+                            && (status.is_active() || setup::installed_by_us(c, game, &launch_args))
+                    }
+                    _ => {
+                        !status.is_active()
+                            && !matches!(status, Status::Blocked(_))
+                            && (game.setup_selected.contains(c.id) || setup::installed_by_us(c, game, &launch_args))
+                    }
+                },
             }
         };
         let mut ids: Vec<&'static str> = def.setup.iter().filter(|c| wanted(c)).map(|c| c.id).collect();
-        if !uninstall {
+        if goal != SetupGoal::Uninstall {
             // Pull in dependencies that aren't installed yet (e.g. the SDK
             // for SDK mods), keeping list order.
             let needed: Vec<&'static str> = ids
@@ -1121,26 +1192,31 @@ impl Workspace {
                     .collect();
             }
         }
-        if uninstall {
+        if goal == SetupGoal::Uninstall {
             // Remove dependents (SDK mods) before what they depend on.
             ids.reverse();
         }
-        if ids.is_empty() {
+        let remembered = (goal == SetupGoal::Reapply).then(|| game.applied.clone());
+        if ids.is_empty() && remembered.as_ref().is_none_or(|a| a.is_empty()) {
             self.toast(
                 ToastKind::Info,
-                if uninstall {
-                    "Nothing to restore — no Vault Patcher components are active."
-                } else {
-                    "Everything selected is already installed."
+                match goal {
+                    SetupGoal::Uninstall => "Nothing to restore — no Vault Patcher components are active.",
+                    SetupGoal::Install => "Everything selected is already installed.",
+                    SetupGoal::Reapply => {
+                        "Nothing to re-apply — no settings or upgrades have been applied yet."
+                    }
                 },
                 cx,
             );
             return;
         }
+        let uninstall = goal == SetupGoal::Uninstall;
         self.setup_run = Some(SetupRun {
-            uninstall,
+            goal,
             steps: ids.iter().map(|id| (*id, StepState::Queued)).collect(),
             finished: false,
+            remembered,
         });
         cx.notify();
 
@@ -1187,13 +1263,40 @@ impl Workspace {
                 let failed = ws.setup_run.as_ref().map_or(0, |r| {
                     r.steps.iter().filter(|(_, s)| matches!(s, StepState::Failed(_))).count()
                 });
+                let done = ws.setup_run.as_ref().map_or(0, |r| {
+                    r.steps.iter().filter(|(_, s)| matches!(s, StepState::Done(_))).count()
+                });
+                // With the components back in place, re-write the remembered
+                // settings and re-patch the exe.
+                let remembered = ws.setup_run.as_mut().and_then(|r| r.remembered.take());
+                let (settings, patched) = remembered
+                    .as_ref()
+                    .map(|a| ws.rewrite_remembered(game_index, a, cx))
+                    .unwrap_or((0, 0));
                 if let Some(run) = &mut ws.setup_run {
                     run.finished = true;
                 }
                 ws.refresh_game(game_index);
-                match (failed, uninstall) {
-                    (0, false) => ws.toast(ToastKind::Success, "All set — enjoy the upgraded game!", cx),
-                    (0, true) => ws.toast(ToastKind::Success, "Restored to vanilla", cx),
+                match (failed, goal) {
+                    (0, SetupGoal::Install) => ws.toast(ToastKind::Success, "All set — enjoy the upgraded game!", cx),
+                    (0, SetupGoal::Uninstall) => ws.toast(ToastKind::Success, "Restored to vanilla", cx),
+                    (0, SetupGoal::Reapply) => {
+                        let mut parts = Vec::new();
+                        if settings > 0 {
+                            parts.push(format!("{settings} setting(s)"));
+                        }
+                        if patched > 0 {
+                            parts.push(format!("{patched} exe patch(es)"));
+                        }
+                        if done > 0 {
+                            parts.push(format!("{done} upgrade(s)"));
+                        }
+                        if parts.is_empty() {
+                            ws.toast(ToastKind::Info, "Everything was already in place", cx);
+                        } else {
+                            ws.toast(ToastKind::Success, format!("Re-applied {}", parts.join(" · ")), cx);
+                        }
+                    }
                     (n, _) => ws.toast(
                         ToastKind::Error,
                         format!("{n} step(s) didn't finish — see the list for details"),
@@ -1224,6 +1327,79 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// One-click recovery for when the game, its launcher or a file check
+    /// rewrote what Vault Patcher set up: re-runs the upgrades that need it,
+    /// then puts every remembered setting value and exe patch back.
+    pub fn reapply_all(&mut self, cx: &mut Context<Self>) {
+        if self.setup_running() {
+            self.toast(ToastKind::Info, "Already working — wait for it to finish", cx);
+            return;
+        }
+        if self.game().is_running() {
+            let name = self.game().def.name;
+            self.toast(ToastKind::Error, format!("{name} is running — close it first"), cx);
+            return;
+        }
+        if !self.game().config_found() && self.game().install.is_none() {
+            self.toast(
+                ToastKind::Error,
+                "Game install and settings folder not found — nothing to re-apply to",
+                cx,
+            );
+            return;
+        }
+        self.run_setup(SetupGoal::Reapply, cx);
+    }
+
+    /// End of a re-apply run: writes the remembered setting values back and
+    /// re-patches any remembered exe patch that was reverted. Returns the
+    /// (settings, patches) counts; failures toast on their own.
+    fn rewrite_remembered(&mut self, gi: usize, applied: &crate::applied::Applied, cx: &mut Context<Self>) -> (usize, usize) {
+        let def = self.games[gi].def;
+        let mut settings = 0;
+        let writes = crate::applied::resolve(def, applied);
+        if !writes.is_empty() {
+            match self.write_configs(gi, "Before re-applying settings", false, |config| {
+                for (tweak, value) in &writes {
+                    tweak.write(config, value);
+                }
+            }) {
+                Ok(()) => settings = writes.len(),
+                Err(e) => self.toast(ToastKind::Error, format!("Couldn't re-apply settings: {e:#}"), cx),
+            }
+        }
+        let mut patched = 0;
+        if !applied.patches.is_empty()
+            && let Some(path) = self.games[gi].exe_path().filter(|p| p.is_file())
+        {
+            match patches::read_exe(&path) {
+                Ok(mut bytes) => {
+                    for id in &applied.patches {
+                        if let Some(p) = def.patches.iter().find(|p| p.id == id.as_str())
+                            && p.state(&bytes) == PatchState::Unpatched
+                            && p.set(&mut bytes, true).is_ok()
+                        {
+                            patched += 1;
+                        }
+                    }
+                    if patched > 0 {
+                        let written = backup::create(def.id, "Before re-applying exe patches", std::slice::from_ref(&path))
+                            .and_then(|_| {
+                                backup::clear_readonly(&path);
+                                std::fs::write(&path, &bytes).map_err(Into::into)
+                            });
+                        if let Err(e) = written {
+                            self.toast(ToastKind::Error, format!("Couldn't re-apply exe patches: {e:#}"), cx);
+                            patched = 0;
+                        }
+                    }
+                }
+                Err(e) => self.toast(ToastKind::Error, format!("Couldn't read the exe for re-patching: {e:#}"), cx),
+            }
+        }
+        (settings, patched)
     }
 
     /// Begins one setup step. `None` means the step was already skipped.
@@ -1290,6 +1466,7 @@ impl Workspace {
                 backup::clear_readonly(&path);
                 std::fs::write(&path, bytes)
                     .with_context(|| format!("writing {} (is the game running?)", path.display()))?;
+                crate::applied::set_patch(game_id, p.id, !uninstall);
                 Job::Done(if uninstall { "Reverted" } else { "Patched" }.into())
             }
             (ComponentKind::LaunchArg(arg), remove) => {
@@ -1420,6 +1597,8 @@ impl Workspace {
         })();
         match result {
             Ok(()) => {
+                let game_id = self.game().def.id;
+                crate::applied::set_patch(game_id, patch_id, enabled);
                 self.refresh_active(cx);
                 self.toast(
                     ToastKind::Success,
@@ -1469,6 +1648,15 @@ impl Workspace {
         match result {
             Ok(()) => {
                 self.refresh_active(cx);
+                // The restored files are the new intent, so the re-apply
+                // record is rebuilt from them rather than resurrecting what
+                // the restore replaced.
+                let id = self.game().def.id;
+                {
+                    let game = self.game();
+                    crate::applied::sync_current(id, game.def, &game.config);
+                }
+                self.game_mut().applied = crate::applied::load(id);
                 self.toast(ToastKind::Success, format!("Restored \"{}\"", b.label), cx);
             }
             Err(e) => self.toast(ToastKind::Error, format!("Restore failed: {e:#}"), cx),
@@ -1621,18 +1809,71 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn launch(&mut self, cx: &mut Context<Self>) {
-        let Some(exe) = self.game().exe_path() else {
-            self.toast(ToastKind::Error, "Game install not found", cx);
-            return;
+    /// How the Play button launches the current game — the mode last picked
+    /// in its dropdown, falling back to `Normal` for games with no launcher.
+    pub fn launch_mode(&self) -> LaunchMode {
+        let game = self.game();
+        let mode = self.settings.launch_mode.get(game.def.id).copied().unwrap_or(LaunchMode::Normal);
+        match mode {
+            LaunchMode::Normal => LaunchMode::Normal,
+            _ if game.def.launcher.is_some() => mode,
+            _ => LaunchMode::Normal,
+        }
+    }
+
+    /// Remembers `mode` as the Play button's way of starting this game.
+    pub fn set_launch_mode(&mut self, mode: LaunchMode, cx: &mut Context<Self>) {
+        let id = self.game().def.id.to_string();
+        if mode == LaunchMode::Normal {
+            self.settings.launch_mode.remove(&id);
+        } else {
+            self.settings.launch_mode.insert(id, mode);
+        }
+        self.settings.save();
+        cx.notify();
+    }
+
+    /// Play with whatever way is selected in the dropdown (default: launch
+    /// options — the real game exe, never a Steam command).
+    pub fn launch_default(&mut self, cx: &mut Context<Self>) {
+        self.launch(self.launch_mode(), cx);
+    }
+
+    pub fn launch(&mut self, mode: LaunchMode, cx: &mut Context<Self>) {
+        let def = self.game().def;
+        let (exe, args) = match mode {
+            LaunchMode::Launcher => {
+                let path = def
+                    .launcher
+                    .and_then(|l| self.game().install.as_ref().map(|i| i.root.join(l.exe)))
+                    .filter(|p| p.is_file());
+                let Some(path) = path else {
+                    self.toast(ToastKind::Error, "The game's launcher wasn't found", cx);
+                    return;
+                };
+                (path, Vec::new())
+            }
+            _ => {
+                let Some(exe) = self.game().exe_path() else {
+                    self.toast(ToastKind::Error, "Game install not found", cx);
+                    return;
+                };
+                let mut args = self.launch_args();
+                if mode == LaunchMode::Direct
+                    && let Some(l) = def.launcher
+                    && !args.iter().any(|a| a.eq_ignore_ascii_case(l.skip_arg))
+                {
+                    args.push(l.skip_arg.to_string());
+                }
+                (exe, args)
+            }
         };
-        let args = self.launch_args();
         let result = std::process::Command::new(&exe)
             .args(&args)
             .current_dir(exe.parent().unwrap_or(&exe))
             .spawn();
         match result {
-            Ok(_) => self.toast(ToastKind::Success, format!("Launching {}…", self.game().def.short), cx),
+            Ok(_) => self.toast(ToastKind::Success, format!("Launching {}…", def.short), cx),
             Err(e) => self.toast(ToastKind::Error, format!("Launch failed: {e}"), cx),
         }
     }

@@ -34,14 +34,16 @@ Toggle between modes from the title bar.
     redistributed; see `src/textmod.rs`.
 
   *Restore vanilla* undoes everything, and every change is backed up first.
+  *Re-apply all* puts your Vault Patcher settings and upgrades back when the
+  game or its launcher rewrites them (a backup is taken first, too).
 - **Advanced**: every tweak, preset, exe patch and mod-manager tool, as described below.
 
 ## Comparison images
 
 Settings that Nvidia's tweak guide covers link to its interactive comparison pages. Those
 pages are linked, never bundled, because Nvidia's terms don't allow redistribution. Our own
-images are captured by the maintainers and published as a release asset
-(`comparisons-bl2.zip`), which the app downloads on first run. Anyone can re-shoot them from
+images are captured by the maintainers and ship inside the app as embedded assets — nothing
+is downloaded on first run. Anyone can re-shoot them from
 **App Settings → Tools → Comparison Capture**, which runs these steps on their own PC:
 
 1. Writes each option of a setting.
@@ -81,12 +83,23 @@ closes).
 - **Backups**: every apply, patch and SDK install is snapshotted first and can be restored
   in one click.
 - **Launch options** on the Overview page (`-NoLauncher`, `-NoStartupMovies` and more),
-  used by the sidebar's Play button.
+  used by the sidebar's Play button; its dropdown can also start BL2/TPS through the
+  game's own launcher, or the game exe directly no matter what the options say — and
+  whichever you pick there becomes the Play button's default.
+- **Game running**: while a supported game runs (BL2, TPS or BL1 GOTY Enhanced), a screen
+  shows the running state with *Force close* and *Minimize to background*.
+- **Minimize to background**: parks the app while the game plays — window minimized, UI
+  sounds and music muted, near-zero redraw and timer work so it sips CPU and memory — and
+  wakes back up when the game exits.
 - **Look and feel**: a dense desktop layout (Fluent metrics, Segoe UI, Lucide icons) with
   Borderlands yellow as the accent. The game's own art is read from your PC: the Steam
   library banner and logo head the Setup and Overview pages, and each game's exe icon
   appears in the game switcher. Three palettes (Graphite, Pandora, Hyperion) and optional
   button sounds from the game's launcher audio files (nothing is bundled).
+- **Window controls**: a custom-drawn title bar replaces the OS one — minimize, maximize
+  and close are handled by the app itself.
+- **Bundled comparison images**: our own per-setting screenshots are embedded in the exe,
+  so there's no first-run download (see *Comparison images* above).
 - **Updates and support**: checks for a newer Vault Patcher and mod SDK at startup, and
   *Copy diagnostics* puts a bug-report summary on the clipboard.
 - **Detection** of Steam libraries, Epic Games installs, and `Documents\My Games` config
@@ -101,10 +114,10 @@ cargo test           # unit tests
 cargo test -- --ignored --nocapture   # read-only checks against a local BL2 install
 ```
 
-`cargo build --release` produces one self-contained `VaultPatcher.exe`: fonts, icons and
-the logo are embedded, the C runtime is linked statically (`.cargo/config.toml`), and the app
-icon is rendered from `assets/brand/logo.svg` at build time. Everything else (mods, DXVK,
-comparison images) is downloaded to the user's PC on demand.
+`cargo build --release` produces one self-contained `VaultPatcher.exe`: fonts, icons, the
+logo and the comparison images are embedded, the C runtime is linked statically
+(`.cargo/config.toml`), and the app icon is rendered from `assets/brand/logo.svg` at build
+time. Everything else (mods, DXVK) is downloaded to the user's PC on demand.
 
 Requires Windows 10/11. Barlow Condensed is bundled under the OFL and the Lucide icons under
 ISC (`assets/icons/LICENSE-lucide.txt`); body text uses the system Segoe UI.
@@ -122,7 +135,9 @@ src/
   patches.rs   exe patch definitions
   workspace.rs shared app state and every mutation
   health.rs    Overview health checks and the diagnostics report
+  applied.rs   what Vault Patcher last wrote, so "Re-apply" can put it back
   profiles.rs  named settings profiles (JSON)
+  compare.rs   bundled per-setting comparison images and the capture tool
   app.rs       window shell: title bar, nav rail, page host, Apply bar, toasts, dialogs
   theme.rs     palettes (mirrored into gpui-component), rarity colors, icons
   ui.rs        widgets: buttons, switches, sliders, chips, setting rows

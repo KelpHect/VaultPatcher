@@ -666,6 +666,7 @@ pub static GAME: GameDef = GameDef {
     steam_app_ids: &[729040],
     epic_names: &["Borderlands Game of the Year"],
     exe: "Binaries\\Win64\\BorderlandsGOTY.exe",
+    launcher: None,
     config_subdir: "Borderlands Game of the Year\\WillowGame\\Config",
     ini_files: &[(E, "WillowEngine.ini"), (G, "WillowGame.ini"), (I, "WillowInput.ini")],
     categories: CATEGORIES,

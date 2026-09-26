@@ -148,8 +148,43 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         ));
     }
 
+    // Something rewrote what Vault Patcher last saved — the game's launcher
+    // keeping its own video settings, an in-game menu, "verify files"...
+    let drifted = crate::applied::resolve(def, &game.applied)
+        .iter()
+        .filter(|(t, want)| game.current(t).as_ref() != Some(want))
+        .count();
+    let reverted = applied_patches_reverted(game);
+    if drifted + reverted > 0 {
+        let mut parts = Vec::new();
+        if drifted > 0 {
+            parts.push(format!("{drifted} setting(s)"));
+        }
+        if reverted > 0 {
+            parts.push(format!("{reverted} exe patch(es)"));
+        }
+        out.push(check(
+            Level::Warn,
+            format!("{} changed outside Vault Patcher", parts.join(" · ")),
+            "The game or its launcher rewrote them — Re-apply puts them all back.",
+            Some(("Re-apply", PageKind::Setup)),
+        ));
+    }
+
     out.sort_by_key(|c| c.level);
     out
+}
+
+/// Exe patches recorded as applied that are currently back to unpatched.
+fn applied_patches_reverted(game: &crate::workspace::GameState) -> usize {
+    let Some(exe) = game.exe.as_ref() else {
+        return 0;
+    };
+    game.applied
+        .patches
+        .iter()
+        .filter(|id| exe.patch_states.get(id.as_str()) == Some(&PatchState::Unpatched))
+        .count()
 }
 
 /// A plain-text report for bug reports: paths, versions and states, no

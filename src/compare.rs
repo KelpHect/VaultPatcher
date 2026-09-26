@@ -618,12 +618,19 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
     result
 }
 
-// ---- hosted image packs ---------------------------------------------------------------
-// The app bundles no images: a captured set is published as a zip on the
-// project's GitHub releases and downloaded on first use.
+// ---- comparison image packs ------------------------------------------------------------
+// Captured image sets ship inside the exe under `assets/comparisons/<game>/`,
+// in the same `<tweak>/<value>.jpg` layout `unpack_pack` writes, and are
+// copied to the data dir on first run. Packs published on GitHub releases are
+// still downloaded as a fallback for games with comparisons but no bundled set.
 
 /// GitHub repository whose releases host the comparison packs.
 pub const IMAGE_REPO: &str = "KelpHect/VaultPatcher";
+
+/// The image sets compiled into the exe, one folder per game id.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "assets/comparisons"]
+struct ComparisonImages;
 
 fn pack_url(game_id: &str) -> String {
     format!("https://github.com/{IMAGE_REPO}/releases/download/comparisons-{game_id}/comparisons-{game_id}.zip")
@@ -633,7 +640,8 @@ pub fn has_local_images(game_id: &str) -> bool {
     fs::read_dir(comparisons_dir().join(game_id)).is_ok_and(|mut d| d.next().is_some())
 }
 
-/// Downloads and unpacks the published image pack for a game.
+/// Downloads and unpacks the published image pack for a game. Fallback for
+/// games whose set isn't bundled into the exe.
 pub fn download_pack(game_id: &str) -> Result<usize> {
     let tmp = std::env::temp_dir().join(format!("vaultpatcher-comparisons-{game_id}.zip"));
     crate::core::net::download(&pack_url(game_id), &tmp)?;
@@ -643,6 +651,41 @@ pub fn download_pack(game_id: &str) -> Result<usize> {
     count
 }
 
+/// Copies a game's bundled images into `comparisons_dir()`, writing only
+/// files that are missing or the wrong size. Returns how many were written;
+/// zero for games with no bundled set.
+pub fn extract_pack(game_id: &str) -> usize {
+    let prefix = format!("{game_id}/");
+    let mut written = 0;
+    for path in ComparisonImages::iter() {
+        let Some(rel) = path.strip_prefix(prefix.as_str()) else { continue };
+        let parts: Vec<&str> = rel.split('/').collect();
+        if !is_pack_entry(&parts) {
+            continue;
+        }
+        let Some(file) = ComparisonImages::get(path.as_ref()) else { continue };
+        let out = comparisons_dir().join(game_id).join(parts[0]).join(parts[1]);
+        if out.metadata().is_ok_and(|m| m.len() == file.data.len() as u64) {
+            continue;
+        }
+        if fs::create_dir_all(out.parent().expect("has parent")).is_ok() && fs::write(&out, &file.data).is_ok() {
+            written += 1;
+        }
+    }
+    if written > 0 {
+        invalidate_images();
+    }
+    written
+}
+
+/// `true` for `<tweak>/<value>.jpg` entries — anything else is ignored and
+/// nothing can escape the destination folder.
+fn is_pack_entry(parts: &[&str]) -> bool {
+    parts.len() == 2
+        && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)) && *p != "..")
+        && parts[1].ends_with(".jpg")
+}
+
 /// Extracts `<tweak>/<value>.jpg` entries into `dest`; anything else is ignored.
 fn unpack_pack(zip_path: &Path, dest: &Path) -> Result<usize> {
     let mut archive = zip::ZipArchive::new(fs::File::open(zip_path)?).context("image pack isn't a valid zip")?;
@@ -650,12 +693,8 @@ fn unpack_pack(zip_path: &Path, dest: &Path) -> Result<usize> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().replace('\\', "/");
-        // Only `<tweak>/<value>.jpg` entries; nothing can escape the folder.
         let parts: Vec<&str> = name.split('/').collect();
-        let safe = parts.len() == 2
-            && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)) && *p != "..")
-            && name.ends_with(".jpg");
-        if entry.is_dir() || !safe {
+        if entry.is_dir() || !is_pack_entry(&parts) {
             continue;
         }
         let out = dest.join(parts[0]).join(parts[1]);
@@ -728,6 +767,19 @@ mod tests {
         assert!(dest.join("ao/on.jpg").is_file());
         assert!(!dir.join("evil.jpg").exists() && !dest.join("ao/script.exe").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_sets_follow_the_disk_layout() {
+        // `assets/comparisons/<game>/<tweak>/<value>.jpg` mirrors what
+        // `unpack_pack` writes into the data dir.
+        let files: Vec<_> = ComparisonImages::iter().collect();
+        assert!(files.iter().any(|f| f.starts_with("bl2/")), "bl2's set is bundled");
+        for f in files {
+            let parts: Vec<&str> = f.split('/').collect();
+            assert_eq!(parts.len(), 3, "{f}");
+            assert!(is_pack_entry(&parts[1..]), "{f}");
+        }
     }
 
     #[test]

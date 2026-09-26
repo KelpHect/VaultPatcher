@@ -1,7 +1,7 @@
 //! Borderlands 2 — the fully supported flagship title.
 
 use super::willow;
-use super::{COMMON_NAV, GameDef, LaunchArg, ModSupport, NavGroup, NavItem, PageKind, Support};
+use super::{COMMON_NAV, GameDef, LaunchArg, LauncherDef, ModSupport, NavGroup, NavItem, PageKind, Support};
 use crate::patches::{ExePatch, ExePatchKind};
 use crate::theme::{Icon, Rarity};
 
@@ -96,6 +96,14 @@ pub const PATCHES: &[ExePatch] = &[
     },
 ];
 
+/// The menu Gearbox runs before the game proper. It rewrites its copy of
+/// the video settings (kept in `LauncherConfig`) on every run, which is why
+/// skipping it — or re-applying afterwards — keeps your tweaks in place.
+pub const LAUNCHER: LauncherDef = LauncherDef {
+    exe: "Binaries\\Win32\\Launcher.exe",
+    skip_arg: "-NoLauncher",
+};
+
 pub const LAUNCH_ARGS: &[LaunchArg] = &[
     LaunchArg {
         arg: "-NoLauncher",
@@ -170,6 +178,7 @@ pub static GAME: GameDef = GameDef {
     steam_app_ids: &[49520],
     epic_names: &["Borderlands 2"],
     exe: "Binaries\\Win32\\Borderlands2.exe",
+    launcher: Some(&LAUNCHER),
     config_subdir: "Borderlands 2\\WillowGame\\Config",
     ini_files: willow::INI_FILES,
     categories: willow::CATEGORIES,

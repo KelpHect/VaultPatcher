@@ -35,6 +35,7 @@ pub static GAME: GameDef = GameDef {
     steam_app_ids: &[261640],
     epic_names: &["Pre-Sequel"],
     exe: "Binaries\\Win32\\BorderlandsPreSequel.exe",
+    launcher: Some(&bl2::LAUNCHER),
     config_subdir: "Borderlands The Pre-Sequel\\WillowGame\\Config",
     ini_files: willow::INI_FILES,
     categories: willow::CATEGORIES,

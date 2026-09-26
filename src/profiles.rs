@@ -88,7 +88,7 @@ pub fn snapshot(def: &GameDef, name: &str, value_of: impl Fn(&'static Tweak) -> 
     }
 }
 
-fn encode(value: &Value) -> Option<serde_json::Value> {
+pub(crate) fn encode(value: &Value) -> Option<serde_json::Value> {
     Some(match value {
         Value::Bool(b) => (*b).into(),
         Value::Num(n) => serde_json::Number::from_f64(*n)?.into(),
@@ -116,7 +116,7 @@ pub fn resolve(def: &GameDef, profile: &Profile) -> Result<(Vec<(&'static Tweak,
     Ok((out, skipped))
 }
 
-fn decode(tweak: &Tweak, raw: &serde_json::Value) -> Option<Value> {
+pub(crate) fn decode(tweak: &Tweak, raw: &serde_json::Value) -> Option<Value> {
     match tweak.control {
         Control::Toggle => raw.as_bool().map(Value::Bool),
         Control::Slider { .. } => raw.as_f64().map(Value::Num),

@@ -22,17 +22,24 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         (None, _) => def.tagline.to_string(),
     };
     let rescan_ws = ws.clone();
+    let reapply_ws = ws.clone();
     let play_ws = ws.clone();
     let mut actions = vec![
-        ui::button("ov-rescan", "Rescan", Some(Icon::Refresh), Variant::Secondary)
+        ui::button("ov-rescan", "Rescan", Some(Icon::Search), Variant::Secondary)
             .tooltip(ui::tip("Look for the game, its settings and mods again"))
             .on_click(move |_, _, cx| rescan_ws.update(cx, |ws, cx| ws.refresh_active(cx)))
+            .into_any_element(),
+        ui::button("ov-reapply", "Re-apply all", Some(Icon::Refresh), Variant::Secondary)
+            .tooltip(ui::tip(
+                "The game or its launcher rewrote your settings? Puts back every Vault Patcher setting and upgrade.",
+            ))
+            .on_click(move |_, _, cx| reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx)))
             .into_any_element(),
     ];
     if game.install.is_some() {
         actions.push(
             ui::button("ov-play", "Play", Some(Icon::Play), Variant::Primary)
-                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch(cx)))
+                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx)))
                 .into_any_element(),
         );
     }

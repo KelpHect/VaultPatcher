@@ -3,8 +3,8 @@
 //! the overlays (comparison viewer, change review, first-run welcome).
 
 use gpui::{
-    AnyElement, Context, ElementId, Entity, ExternalPaths, FontWeight, IntoElement, ObjectFit, ParentElement, Render,
-    SharedString, Styled, Subscription, Window, WindowControlArea, div, img, prelude::*, px,
+    AnyElement, Context, Corner, ElementId, Entity, ExternalPaths, FontWeight, IntoElement, ObjectFit, ParentElement,
+    Render, SharedString, Styled, Subscription, Window, WindowControlArea, div, img, prelude::*, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
@@ -14,7 +14,7 @@ use crate::games::{Mode, NavItem, PageKind};
 use crate::pages;
 use crate::theme::{self, Icon};
 use crate::ui::{self, Variant};
-use crate::workspace::{ToastAction, ToastKind, Workspace};
+use crate::workspace::{LaunchMode, ToastAction, ToastKind, Workspace};
 
 pub struct Shell {
     ws: Entity<Workspace>,
@@ -276,22 +276,140 @@ impl Shell {
         let play_ws = self.ws.clone();
         let can_play = game.install.is_some();
         let running = game.is_running();
-        let play = div().p(px(10.)).border_t_1().border_color(theme::line()).child(
-            ui::button(
-                "rail-play",
-                if running { "Running".to_string() } else { format!("Play {}", game.def.short) },
-                Some(Icon::Play),
-                Variant::Primary,
-            )
-            .w_full()
-            .h(px(36.))
-            .when(!can_play || running, |b| b.opacity(0.45))
-            .tooltip(ui::tip(if can_play { "Start the game with your launch options" } else { "Game install not found" }))
+        let short = game.def.short;
+        // This game ships a separate launcher (BL2/TPS): the menu offers ways
+        // around it. "Through the launcher" additionally needs the file there.
+        let launcher_known = game.def.launcher.is_some();
+        let launcher_exists = game
+            .def
+            .launcher
+            .and_then(|l| game.install.as_ref().map(|i| i.root.join(l.exe)))
+            .is_some_and(|p| p.is_file());
+        let menu_ws = self.ws.clone();
+        let reapply_ws = self.ws.clone();
+        let current_mode = state.launch_mode();
+        // Clicking an entry makes it the Play button's way of launching (the
+        // checkmark) and starts the game that way right now, if it can.
+        let launch_item = move |label: String, detail: &'static str, icon: Icon, mode: LaunchMode| {
+            let ws = menu_ws.clone();
+            PopupMenuItem::element(move |_, _| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .py(px(2.))
+                    .child(ui::icon(icon).size(px(15.)).text_color(theme::text_dim()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(label.clone()))
+                            .child(div().text_size(px(11.5)).text_color(theme::text_dim()).child(detail)),
+                    )
+            })
+            .checked(mode == current_mode)
             .on_click(move |_, _, cx| {
-                if can_play && !running {
-                    play_ws.update(cx, |ws, cx| ws.launch(cx))
-                }
-            }),
+                ws.update(cx, |ws, cx| {
+                    ws.set_launch_mode(mode, cx);
+                    if can_play && !running {
+                        ws.launch(mode, cx);
+                    }
+                })
+            })
+        };
+        let play = div().p(px(10.)).border_t_1().border_color(theme::line()).child(
+            div()
+                .flex()
+                .child(
+                    ui::button(
+                        "rail-play",
+                        if running { "Running".to_string() } else { format!("Play {short}") },
+                        Some(Icon::Play),
+                        Variant::Primary,
+                    )
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(36.))
+                    .rounded_tr(px(0.))
+                    .rounded_br(px(0.))
+                    .when(!can_play || running, |b| b.opacity(0.45))
+                    .tooltip(ui::tip(if can_play {
+                        match current_mode {
+                            LaunchMode::Normal => "Start the game with your launch options",
+                            LaunchMode::Direct => "Start the game exe directly — skipping the launcher",
+                            LaunchMode::Launcher => "Start the game through its own launcher",
+                        }
+                    } else {
+                        "Game install not found"
+                    }))
+                    .on_click(move |_, _, cx| {
+                        if can_play && !running {
+                            play_ws.update(cx, |ws, cx| ws.launch_default(cx))
+                        }
+                    }),
+                )
+                .child(
+                    Button::new("rail-play-menu")
+                        .primary()
+                        .h(px(36.))
+                        .w(px(30.))
+                        .flex_none()
+                        .rounded_tl(px(0.))
+                        .rounded_bl(px(0.))
+                        .border_l_1()
+                        .border_color(theme::accent_pressed())
+                        .tooltip("More ways to start the game")
+                        .child(ui::icon(Icon::ChevronDown).size(px(15.)).text_color(theme::accent_ink()))
+                        .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _, _| {
+                            menu = menu.item(launch_item(
+                                format!("Play {short}"),
+                                "With your launch options",
+                                Icon::Play,
+                                LaunchMode::Normal,
+                            ));
+                            if launcher_known {
+                                menu = menu.item(launch_item(
+                                    "Skip the launcher".into(),
+                                    "The game exe directly — nothing rewrites your settings",
+                                    Icon::Rocket,
+                                    LaunchMode::Direct,
+                                ));
+                            }
+                            if launcher_exists {
+                                menu = menu.item(launch_item(
+                                    "Through the game launcher".into(),
+                                    "The game's own menu — it may re-apply its video settings",
+                                    Icon::Game,
+                                    LaunchMode::Launcher,
+                                ));
+                            }
+                            let reapply_ws = reapply_ws.clone();
+                            menu.separator().item(
+                                PopupMenuItem::element(move |_, _| {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.))
+                                        .py(px(2.))
+                                        .child(ui::icon(Icon::Refresh).size(px(15.)).text_color(theme::text_dim()))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("Re-apply settings & upgrades"))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.5))
+                                                        .text_color(theme::text_dim())
+                                                        .child("The game or its launcher reset things? Put them all back"),
+                                                ),
+                                        )
+                                })
+                                .on_click(move |_, _, cx| reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx))),
+                            )
+                            .min_w(px(300.))
+                        }),
+                ),
         );
 
         div()
