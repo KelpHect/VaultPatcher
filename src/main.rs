@@ -18,6 +18,7 @@ mod profiles;
 mod theme;
 mod tweaks;
 mod ui;
+mod win11;
 mod workspace;
 
 use std::borrow::Cow;
@@ -37,8 +38,8 @@ fn main() {
             .add_fonts(theme::FONT_FILES.iter().map(|f| Cow::Borrowed(*f)).collect())
             .expect("bundled fonts should load");
         gpui_component::init(cx);
-        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-        theme::set_palette(workspace::AppSettings::load().palette);
+        theme::pick_fonts(&cx.text_system().all_font_names());
+        theme::sync();
         theme::apply(cx);
 
         let bounds = Bounds::centered(None, size(px(1240.), px(800.)), cx);
@@ -56,6 +57,9 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                // Mica shows through the transparent parts of the window.
+                theme::set_mica(win11::apply_mica(window));
+                theme::apply(cx);
                 let shell = cx.new(|cx| app::Shell::new(window, cx));
                 cx.new(|cx| gpui_component::Root::new(shell, window, cx))
             },

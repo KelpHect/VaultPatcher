@@ -51,8 +51,8 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                                 .child(ui::title(arg.label))
                                 .child(
                                     div()
-                                        .font_family(theme::FONT_MONO)
-                                        .text_size(px(13.))
+                                        .font_family(theme::font_mono())
+                                        .text_size(px(14.))
                                         .text_color(theme::text_dim())
                                         .child(arg.arg),
                                 ),
@@ -87,8 +87,8 @@ pub fn section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                             .bg(theme::bg_deep())
                             .border_1()
                             .border_color(theme::line())
-                            .font_family(theme::FONT_MONO)
-                            .text_size(px(13.))
+                            .font_family(theme::font_mono())
+                            .text_size(px(14.))
                             .text_color(theme::text())
                             .child(if command_line.is_empty() { "(none)".to_string() } else { command_line }),
                     )

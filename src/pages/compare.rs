@@ -181,7 +181,7 @@ pub fn inline_viewer(tweak: &'static Tweak, ws: &Entity<Workspace>, width: f32, 
                             })
                             .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover)),
                     )
-                    .child(div().text_size(px(11.)).text_color(theme::text_dim()).truncate().child(label.clone()))
+                    .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(label.clone()))
                     .on_click(move |_, _, cx| {
                         if !is_current {
                             ws.update(cx, |ws, cx| ws.set_inline(tweak.id, Some(i), None, cx))
@@ -215,7 +215,7 @@ fn nvidia_link(tweak: &Tweak, url: String) -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(6.))
-        .text_size(px(12.5))
+        .text_size(px(12.))
         .text_color(theme::echo())
         .cursor_pointer()
         .hover(|s| s.text_color(theme::text()))
@@ -326,7 +326,7 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
                     .w(px(frame_w))
                     .flex()
                     .items_center()
-                    .child(div().flex_1().child(ui::display(tweak.label, 24.)))
+                    .child(div().flex_1().child(ui::display(tweak.label, 20.)))
                     .child(
                         ui::icon_button("lightbox-close", Icon::Close, theme::text_muted())
                             .tooltip(ui::tip("Close (Esc)"))
@@ -458,7 +458,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
         let fraction = if progress.total == 0 { 0. } else { progress.done as f32 / progress.total as f32 };
         run = run
             .child(div().h(px(4.)).w_full().rounded_full().bg(theme::panel_lo()).child(div().h_full().rounded_full().w(relative(fraction)).bg(theme::accent())))
-            .child(div().text_size(px(12.5)).text_color(theme::text_dim()).child(if progress.finished {
+            .child(div().text_size(px(12.)).text_color(theme::text_dim()).child(if progress.finished {
                 "Finished. Settings restored.".to_string()
             } else {
                 format!("Shot {} of {}: {}", progress.done + 1, progress.total, progress.current)

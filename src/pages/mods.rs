@@ -124,7 +124,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         );
     }
     if let Some(b) = busy {
-        sdk = sdk.child(ui::divider()).child(div().px(px(16.)).py(px(8.)).text_size(px(12.5)).text_color(theme::accent()).child(b));
+        sdk = sdk.child(ui::divider()).child(div().px(px(16.)).py(px(8.)).text_size(px(12.)).text_color(theme::accent_text()).child(b));
     }
     let mut links = div().flex().flex_wrap().gap(px(12.));
     for (i, (text, url)) in support.links.iter().enumerate() {
@@ -135,7 +135,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .text_size(px(12.5))
+                .text_size(px(12.))
                 .text_color(theme::echo())
                 .cursor_pointer()
                 .hover(|s| s.text_color(theme::text()))
@@ -212,7 +212,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .child(div().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(m.name.clone()))
+                                .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child(m.name.clone()))
                                 .when_some(m.version.clone(), |d, v| d.child(div().text_size(px(12.)).text_color(theme::text_dim()).child(format!("v{v}"))))
                                 .child(ui::badge(m.kind.label(), kind_color)),
                         )

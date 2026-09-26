@@ -1,199 +1,294 @@
-//! Visual language: a dense, dark desktop UI (Fluent-style metrics) with
-//! Borderlands hazard yellow as the single accent. The game's own artwork
-//! (banner, logo, icon) carries the Borderlands identity; loot rarity colors
-//! remain as small semantic tags.
+//! Visual language: native Windows 11 (Fluent / WinUI 3). Colors are the
+//! WinUI theme brushes for the user's light or dark app mode, with their
+//! Windows accent color; the window sits on Mica where the system supports
+//! it. Loot rarity colors remain as small semantic tags.
 //!
-//! Colors come from the active [`Palette`], switchable at runtime; every
-//! widget reads them through the functions below, and [`apply`] mirrors them
-//! into gpui-component's theme so its inputs, menus and tooltips match.
+//! Every widget reads colors through the functions below, and [`apply`]
+//! mirrors them into gpui-component's theme so its inputs, menus and tooltips
+//! match. [`sync`] re-reads the Windows settings (on start, on a light/dark
+//! switch, and whenever the window is activated, which covers accent changes).
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::RwLock;
+use std::time::Duration;
 
-use gpui::{App, BoxShadow, Hsla, Rgba, point, px, rgb};
-use serde::{Deserialize, Serialize};
+use gpui::{App, BoxShadow, Hsla, Rgba, SharedString, point, px, rgb, rgba};
 
-/// Page titles, game names and the wordmark.
-pub const FONT_TITLE: &str = "Barlow Condensed";
-/// Everything else: the Windows UI font.
-pub const FONT_BODY: &str = "Segoe UI";
-pub const FONT_MONO: &str = "Consolas";
+use crate::win11::SystemTheme;
 
-/// The bundled typefaces (SIL Open Font License).
+/// Bundled fallback for PCs without the Segoe UI family (SIL Open Font License).
 pub const FONT_FILES: &[&[u8]] = &[
-    include_bytes!("../assets/fonts/BarlowCondensed-Medium.ttf"),
-    include_bytes!("../assets/fonts/BarlowCondensed-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/BarlowCondensed-Bold.ttf"),
+    include_bytes!("../assets/fonts/NotoSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/NotoSans-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/NotoSans-Bold.ttf"),
 ];
+const FONT_FALLBACK: &str = "Noto Sans";
 
-/// Corner radii: controls and surfaces.
+/// ControlCornerRadius and OverlayCornerRadius.
 pub const RADIUS: f32 = 4.;
 pub const RADIUS_LG: f32 = 8.;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Palette {
-    /// Cool graphite neutrals.
-    #[default]
-    VaultHunter,
-    /// Warm, dusty Pandora browns.
-    Pandora,
-    /// Hyperion corporate navy.
-    Hyperion,
+/// WinUI's ControlNormalAnimationDuration.
+pub const NORMAL: Duration = Duration::from_millis(250);
+
+struct State {
+    system: SystemTheme,
+    mica: bool,
+    motion: bool,
+    body: &'static str,
+    display: &'static str,
+    mono: &'static str,
 }
 
-impl Palette {
-    pub const ALL: [Palette; 3] = [Palette::VaultHunter, Palette::Pandora, Palette::Hyperion];
+static STATE: RwLock<State> = RwLock::new(State {
+    system: SystemTheme { dark: true, accent: [0x99ebff, 0x4cc2ff, 0x0091f8, 0x0078d4, 0x005a9e, 0x003e92, 0x001a68] },
+    mica: false,
+    motion: true,
+    body: "Segoe UI",
+    display: "Segoe UI",
+    mono: "Consolas",
+});
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Palette::VaultHunter => "Graphite",
-            Palette::Pandora => "Pandora",
-            Palette::Hyperion => "Hyperion",
-        }
-    }
+fn state<T>(f: impl FnOnce(&State) -> T) -> T {
+    f(&STATE.read().unwrap_or_else(|e| e.into_inner()))
 }
 
-struct Colors {
-    bg: u32,
-    bg_alt: u32,
-    surface: u32,
-    surface_hover: u32,
-    surface_selected: u32,
-    sunken: u32,
-    border: u32,
-    border_strong: u32,
-    text: u32,
-    text2: u32,
-    text3: u32,
+/// Picks the UI fonts from what's installed: Segoe UI Variable (Windows 11),
+/// Segoe UI (Windows 10), else the bundled Noto Sans.
+pub fn pick_fonts(installed: &[String]) {
+    let has = |name: &str| installed.iter().any(|f| f.eq_ignore_ascii_case(name));
+    let first = |names: &[&'static str]| names.iter().copied().find(|n| has(n)).unwrap_or(FONT_FALLBACK);
+    let mut s = STATE.write().unwrap_or_else(|e| e.into_inner());
+    s.body = first(&["Segoe UI Variable Text", "Segoe UI"]);
+    s.display = first(&["Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI"]);
+    s.mono = ["Cascadia Mono", "Consolas"].into_iter().find(|n| has(n)).unwrap_or(FONT_FALLBACK);
 }
 
-const VAULT_HUNTER: Colors = Colors {
-    bg: 0x1a1b1e,
-    bg_alt: 0x141517,
-    surface: 0x232428,
-    surface_hover: 0x2b2d31,
-    surface_selected: 0x33302a,
-    sunken: 0x161719,
-    border: 0x34363b,
-    border_strong: 0x45484e,
-    text: 0xededef,
-    text2: 0xa9abb2,
-    text3: 0x7c7e86,
-};
-
-const PANDORA: Colors = Colors {
-    bg: 0x1c1814,
-    bg_alt: 0x15120f,
-    surface: 0x26211b,
-    surface_hover: 0x2f2921,
-    surface_selected: 0x3a3122,
-    sunken: 0x17140f,
-    border: 0x3a3228,
-    border_strong: 0x4c4235,
-    text: 0xf1e9da,
-    text2: 0xb8ac98,
-    text3: 0x8a7f6d,
-};
-
-const HYPERION: Colors = Colors {
-    bg: 0x141a26,
-    bg_alt: 0x0f141e,
-    surface: 0x1b2331,
-    surface_hover: 0x222c3d,
-    surface_selected: 0x2c3140,
-    sunken: 0x10151f,
-    border: 0x2a3547,
-    border_strong: 0x3a4760,
-    text: 0xeef2f8,
-    text2: 0xa6b1c4,
-    text3: 0x76849e,
-};
-
-static ACTIVE: AtomicU8 = AtomicU8::new(0);
-
-pub fn set_palette(palette: Palette) {
-    ACTIVE.store(palette as u8, Ordering::Relaxed);
+/// Body text face.
+pub fn font_body() -> SharedString {
+    state(|s| s.body).into()
+}
+/// Paths, ini keys and launch arguments.
+pub fn font_mono() -> SharedString {
+    state(|s| s.mono).into()
+}
+/// Titles (Title / Subtitle / Display ramp).
+pub fn font_display() -> SharedString {
+    state(|s| s.display).into()
 }
 
-pub fn palette() -> Palette {
-    match ACTIVE.load(Ordering::Relaxed) {
-        1 => Palette::Pandora,
-        2 => Palette::Hyperion,
-        _ => Palette::VaultHunter,
-    }
+/// Whether the window has the Mica backdrop (set once after it opens).
+pub fn set_mica(on: bool) {
+    STATE.write().unwrap_or_else(|e| e.into_inner()).mica = on;
 }
 
-fn colors() -> &'static Colors {
-    match palette() {
-        Palette::VaultHunter => &VAULT_HUNTER,
-        Palette::Pandora => &PANDORA,
-        Palette::Hyperion => &HYPERION,
-    }
+/// Re-reads light/dark, accent and the animation setting from Windows.
+/// Returns true when anything changed (then call [`apply`]).
+pub fn sync() -> bool {
+    let system = crate::win11::system_theme();
+    let motion = crate::win11::animations_enabled();
+    let mut s = STATE.write().unwrap_or_else(|e| e.into_inner());
+    let changed = s.system != system || s.motion != motion;
+    s.system = system;
+    s.motion = motion;
+    changed
 }
 
-/// Window background.
+pub fn is_dark() -> bool {
+    state(|s| s.system.dark)
+}
+
+/// False when the user turned off Windows' "Animation effects".
+pub fn motion() -> bool {
+    state(|s| s.motion)
+}
+
+/// Picks the light- or dark-theme value of a brush (`0xRRGGBBAA`).
+fn pick(light: u32, dark: u32) -> Rgba {
+    rgba(if is_dark() { dark } else { light })
+}
+
+fn accent_shade(i: usize) -> Rgba {
+    rgb(state(|s| s.system.accent[i]))
+}
+
+// ---- backgrounds and layers ----------------------------------------------------
+
+/// Window background: transparent over Mica, else SolidBackgroundFillColorBase.
 pub fn bg() -> Rgba {
-    rgb(colors().bg)
+    if state(|s| s.mica) { rgba(0) } else { bg_deep() }
 }
-/// Title bar, navigation rail and status bar.
+/// SolidBackgroundFillColorBase: opaque base, scrims behind text on art.
 pub fn bg_deep() -> Rgba {
-    rgb(colors().bg_alt)
+    pick(0xf3f3f3ff, 0x202020ff)
 }
-/// Grouped rows and cards.
+/// LayerFillColorDefault: the content area that sits on Mica.
+pub fn layer() -> Rgba {
+    pick(0xffffff80, 0x3a3a3a4c)
+}
+/// CardBackgroundFillColorDefault: grouped rows and cards.
 pub fn panel() -> Rgba {
-    rgb(colors().surface)
+    pick(0xffffffb3, 0xffffff0d)
 }
-/// Hovered rows, secondary buttons.
+/// SubtleFillColorSecondary: hovered rows and list items.
 pub fn panel_hi() -> Rgba {
-    rgb(colors().surface_hover)
+    pick(0x00000009, 0xffffff0f)
 }
-/// Selected rows (a warm tint of the accent).
+/// SubtleFillColorTertiary: pressed rows and list items.
+pub fn panel_pressed() -> Rgba {
+    pick(0x00000006, 0xffffff0a)
+}
+/// Selected list/nav item background (SubtleFillColorSecondary).
 pub fn selected() -> Rgba {
-    rgb(colors().surface_selected)
+    panel_hi()
 }
-/// Wells: tracks, code boxes, image backdrops.
+/// CardBackgroundFillColorSecondary: wells, code boxes, image backdrops.
 pub fn panel_lo() -> Rgba {
-    rgb(colors().sunken)
+    pick(0xf6f6f680, 0xffffff08)
 }
-/// Strong outline (inputs, unchecked controls).
+/// ControlFillColorDefault / Secondary / Tertiary: standard buttons, inputs.
+pub fn control() -> Rgba {
+    pick(0xffffffb3, 0xffffff0f)
+}
+pub fn control_hover() -> Rgba {
+    pick(0xf9f9f980, 0xffffff15)
+}
+pub fn control_pressed() -> Rgba {
+    pick(0xf9f9f94d, 0xffffff08)
+}
+/// ControlSolidFillColorDefault: slider thumbs.
+pub fn control_solid() -> Rgba {
+    pick(0xffffffff, 0x454545ff)
+}
+/// ControlAltFillColorSecondary: the "off" toggle track, slider rails' wells.
+pub fn control_alt() -> Rgba {
+    pick(0x00000006, 0x00000019)
+}
+/// Acrylic tint for menus, tooltips and toasts, painted over a blurred
+/// backdrop (AcrylicBackgroundFillColorDefault: #FCFCFC / #2C2C2C tints).
+pub fn acrylic() -> Rgba {
+    pick(0xfcfcfcd0, 0x2c2c2cd0)
+}
+/// Acrylic blur strength (the Fluent recipe's 30px gaussian).
+pub const ACRYLIC_BLUR: f32 = 30.;
+/// ContentDialog body (LayerFillColorAlt over the solid base).
+pub fn dialog() -> Rgba {
+    pick(0xffffffff, 0x2b2b2bff)
+}
+/// SmokeFillColorDefault: dims the window behind a dialog.
+pub fn smoke() -> Rgba {
+    rgba(0x0000004d)
+}
+
+// ---- strokes ------------------------------------------------------------------
+
+/// ControlStrongStrokeColorDefault: unchecked boxes, toggles, slider rails.
 pub fn ink() -> Rgba {
-    rgb(colors().border_strong)
+    pick(0x00000072, 0xffffff8b)
 }
+/// DividerStrokeColorDefault: dividers and hairlines.
 pub fn line() -> Rgba {
-    rgb(colors().border)
+    pick(0x0000000f, 0xffffff15)
 }
+/// CardStrokeColorDefault: the outline of cards and the content layer.
+pub fn card_stroke() -> Rgba {
+    pick(0x0000000f, 0x00000019)
+}
+/// ControlStrokeColorDefault: outline of buttons and inputs.
+pub fn control_stroke() -> Rgba {
+    pick(0x0000000f, 0xffffff12)
+}
+/// ControlStrokeColorSecondary: the bottom edge of buttons (elevation).
+pub fn control_stroke_bottom() -> Rgba {
+    pick(0x00000029, 0xffffff18)
+}
+/// SurfaceStrokeColorFlyout: menus, tooltips, dialogs.
+pub fn flyout_stroke() -> Rgba {
+    pick(0x0000000f, 0x00000033)
+}
+/// FocusStrokeColorOuter: keyboard focus rectangle.
+pub fn focus_stroke() -> Rgba {
+    pick(0x000000e4, 0xffffffff)
+}
+
+// ---- text ---------------------------------------------------------------------
+
+/// TextFillColorPrimary.
 pub fn text() -> Rgba {
-    rgb(colors().text)
+    pick(0x000000e4, 0xffffffff)
 }
+/// TextFillColorSecondary.
 pub fn text_muted() -> Rgba {
-    rgb(colors().text2)
+    pick(0x0000009e, 0xffffffc5)
 }
+/// TextFillColorTertiary.
 pub fn text_dim() -> Rgba {
-    rgb(colors().text3)
+    pick(0x00000072, 0xffffff87)
 }
+/// TextFillColorDisabled.
+pub fn text_disabled() -> Rgba {
+    pick(0x0000005c, 0xffffff5d)
+}
+
+// ---- accent -------------------------------------------------------------------
+
+/// AccentFillColorDefault: primary buttons, toggles on, selection pill.
 pub fn accent() -> Rgba {
-    rgb(0xffc20e)
+    if is_dark() { accent_shade(1) } else { accent_shade(4) }
 }
+/// AccentFillColorSecondary (hover): the default at 90% opacity.
 pub fn accent_hi() -> Rgba {
-    rgb(0xffd04a)
+    Rgba { a: 0.9, ..accent() }
 }
+/// AccentFillColorTertiary (pressed): the default at 80% opacity.
 pub fn accent_pressed() -> Rgba {
-    rgb(0xe0a800)
+    Rgba { a: 0.8, ..accent() }
 }
+/// TextOnAccentFillColorPrimary.
 pub fn accent_ink() -> Rgba {
-    rgb(0x111111)
+    pick(0xffffffff, 0x000000ff)
 }
+/// AccentTextFillColorPrimary: links and accent-colored text.
+pub fn accent_text() -> Rgba {
+    if is_dark() { accent_shade(0) } else { accent_shade(5) }
+}
+
+// ---- status -------------------------------------------------------------------
+
+/// SystemFillColorCritical.
 pub fn danger() -> Rgba {
-    rgb(0xf2555a)
+    pick(0xc42b1cff, 0xff99a4ff)
 }
+/// SystemFillColorCaution.
 pub fn warning() -> Rgba {
-    rgb(0xf5a524)
+    pick(0x9d5d00ff, 0xfce100ff)
 }
+/// SystemFillColorSuccess.
 pub fn success() -> Rgba {
-    rgb(0x4cc38a)
+    pick(0x0f7b0fff, 0x6ccb5fff)
 }
-/// Links and informational accents.
+/// Informational accents (SystemFillColorAttention).
 pub fn echo() -> Rgba {
-    rgb(0x4ea8f2)
+    accent_text()
+}
+/// InfoBar backgrounds: SystemFillColor{Critical,Caution,Success,Attention}Background.
+pub fn danger_bg() -> Rgba {
+    pick(0xfde7e9ff, 0x442726ff)
+}
+pub fn warning_bg() -> Rgba {
+    pick(0xfff4ceff, 0x433519ff)
+}
+pub fn success_bg() -> Rgba {
+    pick(0xdff6ddff, 0x393d1bff)
+}
+pub fn info_bg() -> Rgba {
+    pick(0xf6f6f680, 0xffffff08)
+}
+/// Caption close button, hovered and pressed.
+pub fn close_hover() -> Rgba {
+    rgb(0xc42b1c)
+}
+pub fn close_pressed() -> Rgba {
+    rgba(0xc42b1ce6)
 }
 
 /// Loot rarity tiers, reused as small tags (presets, cost meters).
@@ -210,15 +305,17 @@ pub enum Rarity {
 
 impl Rarity {
     pub fn color(self) -> Rgba {
-        match self {
-            Rarity::Common => rgb(0xd9d6cf),
-            Rarity::Uncommon => rgb(0x5bc85a),
-            Rarity::Rare => rgb(0x4a8ff5),
-            Rarity::Epic => rgb(0xa66bf5),
-            Rarity::Legendary => rgb(0xf59131),
-            Rarity::Pearlescent => rgb(0x4fd6c9),
-            Rarity::Seraph => rgb(0xf06aa9),
-        }
+        // Darker shades on light backgrounds so tags stay readable.
+        let (light, dark) = match self {
+            Rarity::Common => (0x5f5d58, 0xd9d6cf),
+            Rarity::Uncommon => (0x2e7d2d, 0x5bc85a),
+            Rarity::Rare => (0x1f5fc2, 0x4a8ff5),
+            Rarity::Epic => (0x7a3fc9, 0xa66bf5),
+            Rarity::Legendary => (0xb35a00, 0xf59131),
+            Rarity::Pearlescent => (0x0f7f76, 0x4fd6c9),
+            Rarity::Seraph => (0xb8306f, 0xf06aa9),
+        };
+        rgb(if is_dark() { dark } else { light })
     }
 
     pub fn label(self) -> &'static str {
@@ -240,66 +337,87 @@ pub fn with_alpha(color: Rgba, a: f32) -> Hsla {
     c
 }
 
-/// Soft elevation for popups, toasts and the viewer.
+/// Flyout elevation (menus, tooltips, toasts): a soft ambient + key shadow.
 pub fn shadow() -> Vec<BoxShadow> {
+    let a = if is_dark() { 0.26 } else { 0.14 };
+    vec![
+        BoxShadow { color: gpui::hsla(0., 0., 0., a), offset: point(px(0.), px(8.)), blur_radius: px(16.), spread_radius: px(0.) },
+        BoxShadow { color: gpui::hsla(0., 0., 0., a * 0.6), offset: point(px(0.), px(0.)), blur_radius: px(2.), spread_radius: px(0.) },
+    ]
+}
+
+/// Dialog elevation (ContentDialog sits highest).
+pub fn shadow_dialog() -> Vec<BoxShadow> {
+    let a = if is_dark() { 0.37 } else { 0.19 };
+    vec![
+        BoxShadow { color: gpui::hsla(0., 0., 0., a), offset: point(px(0.), px(32.)), blur_radius: px(64.), spread_radius: px(0.) },
+        BoxShadow { color: gpui::hsla(0., 0., 0., a * 0.5), offset: point(px(0.), px(2.)), blur_radius: px(21.), spread_radius: px(0.) },
+    ]
+}
+
+/// Card/button elevation: the 1px darker bottom edge is drawn as a border,
+/// this adds the barely-there drop.
+pub fn shadow_card() -> Vec<BoxShadow> {
     vec![BoxShadow {
-        color: gpui::hsla(0., 0., 0., 0.45),
-        offset: point(px(0.), px(8.)),
-        blur_radius: px(24.),
+        color: gpui::hsla(0., 0., 0., if is_dark() { 0.13 } else { 0.04 }),
+        offset: point(px(0.), px(1.)),
+        blur_radius: px(2.),
         spread_radius: px(0.),
     }]
 }
 
-/// Mirrors the palette into gpui-component's theme (inputs, menus, tooltips,
+/// Mirrors the brushes into gpui-component's theme (inputs, menus, tooltips,
 /// dialogs, scrollbars).
 pub fn apply(cx: &mut App) {
     let h = |c: Rgba| -> Hsla { c.into() };
+    let mode = if is_dark() { gpui_component::ThemeMode::Dark } else { gpui_component::ThemeMode::Light };
+    gpui_component::Theme::change(mode, None, cx);
     let theme = gpui_component::Theme::global_mut(cx);
-    theme.font_family = FONT_BODY.into();
-    theme.font_size = px(16.);
-    theme.mono_font_family = FONT_MONO.into();
+    theme.font_family = font_body();
+    theme.font_size = px(14.);
+    theme.mono_font_family = font_mono();
     theme.radius = px(RADIUS);
     theme.radius_lg = px(RADIUS_LG);
     theme.shadow = true;
     let c = &mut theme.colors;
     c.background = h(bg());
     c.foreground = h(text());
-    c.border = h(line());
-    c.input = h(ink());
-    c.ring = h(accent());
-    c.caret = h(accent());
-    c.selection = with_alpha(accent(), 0.3);
-    c.muted = h(panel());
+    c.border = h(control_stroke());
+    c.input = h(control_stroke_bottom());
+    c.ring = h(focus_stroke());
+    c.caret = h(text());
+    c.selection = with_alpha(accent(), 0.4);
+    c.muted = h(control());
     c.muted_foreground = h(text_muted());
     c.primary = h(accent());
     c.primary_hover = h(accent_hi());
     c.primary_active = h(accent_pressed());
     c.primary_foreground = h(accent_ink());
-    c.secondary = h(panel_hi());
-    c.secondary_hover = h(line());
-    c.secondary_active = h(ink());
+    c.secondary = h(control());
+    c.secondary_hover = h(control_hover());
+    c.secondary_active = h(control_pressed());
     c.secondary_foreground = h(text());
     c.accent = h(panel_hi());
     c.accent_foreground = h(text());
-    c.popover = h(panel());
+    c.popover = h(acrylic());
     c.popover_foreground = h(text());
-    c.list = h(bg());
+    c.list = gpui::transparent_black();
     c.list_hover = h(panel_hi());
     c.list_active = h(selected());
     c.list_active_border = h(accent());
-    c.list_even = h(bg());
-    c.list_head = h(bg_deep());
-    c.table = h(bg());
-    c.table_head = h(bg_deep());
+    c.list_even = gpui::transparent_black();
+    c.list_head = gpui::transparent_black();
+    c.table = gpui::transparent_black();
+    c.table_head = h(panel_lo());
     c.table_head_foreground = h(text_muted());
     c.table_hover = h(panel_hi());
     c.table_active = h(selected());
     c.table_active_border = h(accent());
-    c.table_even = h(bg());
+    c.table_even = gpui::transparent_black();
     c.table_row_border = h(line());
-    c.title_bar = h(bg_deep());
-    c.title_bar_border = h(line());
-    c.sidebar = h(bg_deep());
+    c.title_bar = gpui::transparent_black();
+    c.title_bar_border = gpui::transparent_black();
+    c.sidebar = gpui::transparent_black();
     c.sidebar_foreground = h(text());
     c.sidebar_border = h(line());
     c.sidebar_accent = h(panel_hi());
@@ -309,20 +427,20 @@ pub fn apply(cx: &mut App) {
     c.switch = h(ink());
     c.switch_thumb = h(text());
     c.slider_bar = h(accent());
-    c.slider_thumb = h(text());
+    c.slider_thumb = h(accent());
     c.progress_bar = h(accent());
-    c.tab = h(bg());
+    c.tab = gpui::transparent_black();
     c.tab_active = h(panel());
     c.tab_active_foreground = h(text());
-    c.tab_bar = h(bg_deep());
+    c.tab_bar = gpui::transparent_black();
     c.tab_foreground = h(text_muted());
-    c.link = h(echo());
-    c.link_hover = h(echo());
-    c.link_active = h(echo());
+    c.link = h(accent_text());
+    c.link_hover = with_alpha(accent_text(), 0.8);
+    c.link_active = with_alpha(accent_text(), 0.6);
     c.danger = h(danger());
     c.danger_hover = h(danger());
     c.danger_active = h(danger());
-    c.danger_foreground = h(text());
+    c.danger_foreground = h(accent_ink());
     c.success = h(success());
     c.success_hover = h(success());
     c.success_active = h(success());
@@ -331,21 +449,21 @@ pub fn apply(cx: &mut App) {
     c.warning_hover = h(warning());
     c.warning_active = h(warning());
     c.warning_foreground = h(accent_ink());
-    c.info = h(echo());
-    c.info_hover = h(echo());
-    c.info_active = h(echo());
+    c.info = h(accent());
+    c.info_hover = h(accent_hi());
+    c.info_active = h(accent_pressed());
     c.info_foreground = h(accent_ink());
     c.scrollbar = gpui::transparent_black();
-    c.scrollbar_thumb = with_alpha(text_dim(), 0.45);
-    c.scrollbar_thumb_hover = with_alpha(text_muted(), 0.6);
-    c.overlay = gpui::hsla(0., 0., 0., 0.6);
-    c.window_border = h(line());
+    c.scrollbar_thumb = h(ink());
+    c.scrollbar_thumb_hover = h(text_muted());
+    c.overlay = h(smoke());
+    c.window_border = h(card_stroke());
     c.drop_target = with_alpha(accent(), 0.12);
     c.drag_border = h(accent());
 }
 
-/// Lucide icons (ISC) under `assets/icons`, plus a few from
-/// gpui-component's own set. Kept as a palette for pages to pick from.
+/// Segoe Fluent Icons glyphs, drawn from the installed system font (see
+/// [`crate::win11::glyph_svg`]). Kept as a palette for pages to pick from.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
@@ -392,10 +510,12 @@ pub enum Icon {
     Globe,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     ChevronLeft,
     Minimize,
     Maximize,
     Restore,
+    WindowClose,
     Music,
     Mute,
     Terminal,
@@ -419,92 +539,149 @@ pub enum Icon {
     Edit,
     Loader,
     Expand,
+    Back,
+    Hamburger,
 }
 
 impl Icon {
-    pub fn path(self) -> &'static str {
-        match self {
-            Icon::Home => "vp/house.svg",
-            Icon::Settings => "vp/settings.svg",
-            Icon::Display => "vp/monitor.svg",
-            Icon::Picture => "vp/image.svg",
-            Icon::Sparkle => "vp/sparkles.svg",
-            Icon::Contrast => "vp/sun.svg",
-            Icon::Texture => "vp/layout-grid.svg",
-            Icon::Atom => "vp/zap.svg",
-            Icon::Speed => "vp/gauge.svg",
-            Icon::Camera => "vp/camera.svg",
-            Icon::Mouse => "vp/mouse-pointer-click.svg",
-            Icon::Hud => "vp/layers.svg",
-            Icon::Game => "vp/gamepad-2.svg",
-            Icon::Rocket => "vp/rocket.svg",
-            Icon::Shield => "vp/shield-check.svg",
-            Icon::Package => "vp/package.svg",
-            Icon::Download => "vp/download.svg",
-            Icon::Upload => "vp/upload.svg",
-            Icon::Folder => "vp/folder-open.svg",
-            Icon::History => "vp/history.svg",
-            Icon::Save => "vp/save.svg",
-            Icon::Undo => "vp/undo-2.svg",
-            Icon::Refresh => "vp/refresh-cw.svg",
-            Icon::Play => "vp/play.svg",
-            Icon::Warning => "vp/triangle-alert.svg",
-            Icon::Check => "vp/check.svg",
-            Icon::CheckCircle => "vp/circle-check-big.svg",
-            Icon::Close => "vp/x.svg",
-            Icon::Info => "vp/info.svg",
-            Icon::Delete => "vp/trash-2.svg",
-            Icon::Add => "vp/plus.svg",
-            Icon::Minus => "vp/minus.svg",
-            Icon::Link => "vp/external-link.svg",
-            Icon::Code => "vp/terminal.svg",
-            Icon::Wrench => "vp/wrench.svg",
-            Icon::Lock => "vp/lock.svg",
-            Icon::Unlock => "vp/lock-open.svg",
-            Icon::Star => "vp/star.svg",
-            Icon::Sliders => "vp/sliders-horizontal.svg",
-            Icon::Volume => "vp/volume-2.svg",
-            Icon::Globe => "icons/globe.svg",
-            Icon::ChevronRight => "vp/chevron-right.svg",
-            Icon::ChevronDown => "vp/chevron-down.svg",
-            Icon::ChevronLeft => "vp/chevron-left.svg",
-            Icon::Minimize => "icons/window-minimize.svg",
-            Icon::Maximize => "icons/window-maximize.svg",
-            Icon::Restore => "icons/window-restore.svg",
-            Icon::Music => "vp/music.svg",
-            Icon::Mute => "vp/volume-x.svg",
-            Icon::Terminal => "vp/terminal.svg",
-            Icon::Puzzle => "vp/puzzle.svg",
-            Icon::Search => "vp/search.svg",
-            Icon::Copy => "vp/clipboard-copy.svg",
-            Icon::Compare => "vp/arrow-left-right.svg",
-            Icon::Filter => "vp/list-filter.svg",
-            Icon::Bookmark => "vp/bookmark.svg",
-            Icon::FileDown => "vp/file-down.svg",
-            Icon::FileUp => "vp/file-up.svg",
-            Icon::Bug => "vp/bug.svg",
-            Icon::Health => "vp/stethoscope.svg",
-            Icon::Profile => "vp/user-round-cog.svg",
-            Icon::Keyboard => "vp/keyboard.svg",
-            Icon::More => "vp/ellipsis-vertical.svg",
-            Icon::Help => "vp/circle-help.svg",
-            Icon::Dashed => "vp/circle-dashed.svg",
-            Icon::Alert => "vp/circle-alert.svg",
-            Icon::Wand => "vp/wand-sparkles.svg",
-            Icon::Edit => "vp/square-pen.svg",
-            Icon::Loader => "vp/loader-circle.svg",
-            Icon::Expand => "icons/maximize.svg",
+    /// Segoe Fluent Icons code point.
+    pub fn glyph(self) -> char {
+        let cp: u32 = match self {
+            Icon::Home => 0xE80F,
+            Icon::Settings => 0xE713,
+            Icon::Display => 0xE7F4,
+            Icon::Picture => 0xE8B9,
+            Icon::Sparkle => 0xE794,
+            Icon::Contrast => 0xE706,
+            Icon::Texture => 0xF0E2,
+            Icon::Atom => 0xE945,
+            Icon::Speed => 0xF42F,
+            Icon::Camera => 0xE722,
+            Icon::Mouse => 0xE7C9,
+            Icon::Hud => 0xE81E,
+            Icon::Game => 0xE7FC,
+            Icon::Rocket => 0xE8AD,
+            Icon::Shield => 0xF760,
+            Icon::Package => 0xE7B8,
+            Icon::Download => 0xE896,
+            Icon::Upload => 0xE898,
+            Icon::Folder => 0xE838,
+            Icon::History => 0xE81C,
+            Icon::Save => 0xE74E,
+            Icon::Undo => 0xE7A7,
+            Icon::Refresh => 0xE72C,
+            Icon::Play => 0xE768,
+            Icon::Warning => 0xE7BA,
+            Icon::Check => 0xE73E,
+            Icon::CheckCircle => 0xE930,
+            Icon::Close => 0xE711,
+            Icon::Info => 0xE946,
+            Icon::Delete => 0xE74D,
+            Icon::Add => 0xE710,
+            Icon::Minus => 0xE738,
+            Icon::Link => 0xE8A7,
+            Icon::Code => 0xE756,
+            Icon::Wrench => 0xE90F,
+            Icon::Lock => 0xE72E,
+            Icon::Unlock => 0xE785,
+            Icon::Star => 0xE734,
+            Icon::Sliders => 0xE9E9,
+            Icon::Volume => 0xE767,
+            Icon::Globe => 0xE774,
+            Icon::ChevronRight => 0xE76C,
+            Icon::ChevronDown => 0xE70D,
+            Icon::ChevronUp => 0xE70E,
+            Icon::ChevronLeft => 0xE76B,
+            Icon::Minimize => 0xE921,
+            Icon::Maximize => 0xE922,
+            Icon::Restore => 0xE923,
+            Icon::WindowClose => 0xE8BB,
+            Icon::Music => 0xEC4F,
+            Icon::Mute => 0xE74F,
+            Icon::Terminal => 0xE756,
+            Icon::Puzzle => 0xEA86,
+            Icon::Search => 0xE721,
+            Icon::Copy => 0xE8C8,
+            Icon::Compare => 0xE8AB,
+            Icon::Filter => 0xE71C,
+            Icon::Bookmark => 0xE8EC,
+            Icon::FileDown => 0xE78C,
+            Icon::FileUp => 0xE8E5,
+            Icon::Bug => 0xEBE8,
+            Icon::Health => 0xE95E,
+            Icon::Profile => 0xEF58,
+            Icon::Keyboard => 0xE765,
+            Icon::More => 0xE712,
+            Icon::Help => 0xE9CE,
+            Icon::Dashed => 0xF16A,
+            Icon::Alert => 0xE783,
+            Icon::Wand => 0xF1D5,
+            Icon::Edit => 0xE70F,
+            Icon::Loader => 0xF16A,
+            Icon::Expand => 0xE740,
+            Icon::Back => 0xE72B,
+            Icon::Hamburger => 0xE700,
+        };
+        char::from_u32(cp).unwrap_or(' ')
+    }
+
+    /// Stand-in for glyphs Segoe MDL2 Assets (Windows 10) lacks.
+    fn fallback(self) -> Option<char> {
+        let cp: u32 = match self {
+            Icon::Sparkle | Icon::Wand => 0xE90F,
+            Icon::Speed => 0xEC4A,
+            Icon::Shield => 0xEA18,
+            _ => return None,
+        };
+        char::from_u32(cp)
+    }
+
+    /// Asset path the SVG pipeline loads (served by [`Assets`]).
+    pub fn path(self) -> SharedString {
+        match self.fallback() {
+            Some(f) => format!("fluent/{:04X}-{:04X}.svg", self.glyph() as u32, f as u32).into(),
+            None => format!("fluent/{:04X}.svg", self.glyph() as u32).into(),
         }
     }
 }
 
-/// Serves our icons (`vp/…`) and gpui-component's (`icons/…`).
-pub struct Assets;
+/// gpui-component's built-in icons redirected to their Segoe Fluent
+/// equivalents, so menus, inputs and dialogs match the rest of the app.
+fn component_icon(name: &str) -> Option<Icon> {
+    Some(match name {
+        "check.svg" => Icon::Check,
+        "chevron-down.svg" => Icon::ChevronDown,
+        "chevron-up.svg" => Icon::ChevronUp,
+        "chevron-left.svg" => Icon::ChevronLeft,
+        "chevron-right.svg" => Icon::ChevronRight,
+        "close.svg" | "circle-x.svg" => Icon::Close,
+        "search.svg" => Icon::Search,
+        "info.svg" => Icon::Info,
+        "circle-check.svg" => Icon::CheckCircle,
+        "triangle-alert.svg" => Icon::Warning,
+        "minus.svg" | "dash.svg" => Icon::Minus,
+        "plus.svg" => Icon::Add,
+        "copy.svg" => Icon::Copy,
+        "ellipsis.svg" | "ellipsis-vertical.svg" => Icon::More,
+        "external-link.svg" => Icon::Link,
+        "folder.svg" | "folder-open.svg" | "folder-closed.svg" => Icon::Folder,
+        "settings.svg" | "settings-2.svg" => Icon::Settings,
+        "globe.svg" => Icon::Globe,
+        "star.svg" => Icon::Star,
+        "window-minimize.svg" => Icon::Minimize,
+        "window-maximize.svg" => Icon::Maximize,
+        "window-restore.svg" => Icon::Restore,
+        "window-close.svg" => Icon::WindowClose,
+        "maximize.svg" => Icon::Expand,
+        "undo.svg" | "undo-2.svg" => Icon::Undo,
+        "menu.svg" => Icon::Hamburger,
+        _ => return None,
+    })
+}
 
-#[derive(rust_embed::RustEmbed)]
-#[folder = "assets/icons"]
-#[include = "*.svg"]
-struct OwnIcons;
+/// Serves the Segoe Fluent glyphs (`fluent/…`), the brand art (`brand/…`) and
+/// gpui-component's assets (`icons/…`, redirected to Fluent where we can).
+pub struct Assets;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets/brand"]
@@ -518,11 +695,21 @@ pub const LOGO_SMALL: &str = "brand/logo-small.svg";
 
 impl gpui::AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        if let Some(name) = path.strip_prefix("vp/") {
-            return Ok(OwnIcons::get(name).map(|f| f.data));
+        if let Some(hex) = path.strip_prefix("fluent/").and_then(|p| p.strip_suffix(".svg")) {
+            // "E794" or "E794-E90F": the glyph, then a stand-in for older fonts.
+            let svg = hex
+                .split('-')
+                .filter_map(|h| u32::from_str_radix(h, 16).ok().and_then(char::from_u32))
+                .find_map(crate::win11::glyph_svg);
+            return Ok(svg.map(std::borrow::Cow::Owned));
         }
         if let Some(name) = path.strip_prefix("brand/") {
             return Ok(Brand::get(name).map(|f| f.data));
+        }
+        if let Some(icon) = path.strip_prefix("icons/").and_then(component_icon)
+            && let Some(svg) = crate::win11::glyph_svg(icon.glyph())
+        {
+            return Ok(Some(std::borrow::Cow::Owned(svg)));
         }
         gpui_component_assets::Assets.load(path)
     }

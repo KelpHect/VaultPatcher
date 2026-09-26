@@ -186,8 +186,8 @@ pub(crate) fn view(
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(ui::display(title.to_string(), 26.))
-                        .child(div().text_size(px(12.5)).text_color(theme::text_dim()).truncate().child(subtitle.to_string())),
+                        .child(ui::display(title.to_string(), 28.))
+                        .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(subtitle.to_string())),
                 )
                 .children(action),
         )
@@ -249,7 +249,7 @@ pub(crate) fn view(
                 .w(px(DETAIL_W))
                 .flex_none()
                 .h_full()
-                .bg(theme::bg_deep())
+                .bg(theme::panel_lo())
                 .border_l_1()
                 .border_color(theme::line())
                 .child(
@@ -311,7 +311,7 @@ fn row(tweak: &'static Tweak, selected: bool, ws: &Entity<Workspace>, instant: b
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .child(div().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(tweak.label))
+                        .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(tweak.label))
                         .when(has_pictures, |d| d.child(ui::icon(Icon::Picture).size(px(12.)).text_color(theme::text_dim())))
                         .when(tweak.flags.experimental, |d| d.child(ui::icon(Icon::Warning).size(px(12.)).text_color(theme::warning()))),
                 )
@@ -360,7 +360,7 @@ fn detail(tweak: &'static Tweak, ws: &Entity<Workspace>, instant: bool, cx: &App
         .flex_col()
         .child(ui::kv_row("In your files", on_disk.as_ref().map_or("not set (default)".into(), |v| v.display(&tweak.control))))
         .child(ui::kv_row("Game default", default.display(&tweak.control)))
-        .when_some(waiting, |d, w| d.child(ui::kv_row("Waiting to apply", w.display(&tweak.control)).text_color(theme::accent())));
+        .when_some(waiting, |d, w| d.child(ui::kv_row("Waiting to apply", w.display(&tweak.control)).text_color(theme::accent_text())));
 
     let reset_ws = ws.clone();
     div()
@@ -374,7 +374,7 @@ fn detail(tweak: &'static Tweak, ws: &Entity<Workspace>, instant: bool, cx: &App
                 .flex_col()
                 .gap(px(2.))
                 .child(ui::label(category))
-                .child(ui::display(tweak.label, 22.)),
+                .child(ui::display(tweak.label, 20.)),
         )
         .child(ui::body(tweak.description))
         .child(tags)
@@ -409,7 +409,7 @@ fn detail(tweak: &'static Tweak, ws: &Entity<Workspace>, instant: bool, cx: &App
                     .flex_col()
                     .gap(px(4.))
                     .child(ui::label("Where it's stored"))
-                    .child(div().font_family(theme::FONT_MONO).text_size(px(12.)).text_color(theme::text_muted()).child(location(tweak, state))),
+                    .child(div().font_family(theme::font_mono()).text_size(px(12.)).text_color(theme::text_muted()).child(location(tweak, state))),
             )
         })
         .into_any_element()
@@ -472,7 +472,7 @@ pub(crate) fn control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspac
                 .bg(theme::panel_lo())
                 .border_1()
                 .border_color(theme::line())
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::font_mono())
                 .text_size(px(12.))
                 .text_color(theme::text())
                 .child(value.display(&tweak.control));

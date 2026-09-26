@@ -33,7 +33,6 @@ pub struct AppSettings {
     pub launch_mode: HashMap<String, LaunchMode>,
     pub max_backups: Option<usize>,
     pub mode: Mode,
-    pub palette: crate::theme::Palette,
     pub sound_muted: bool,
     /// Advanced: show ini file/section/key under each setting.
     pub show_file_details: bool,
@@ -550,13 +549,6 @@ impl Workspace {
         }
     }
 
-    pub fn set_palette(&mut self, palette: crate::theme::Palette, cx: &mut Context<Self>) {
-        crate::theme::set_palette(palette);
-        crate::theme::apply(cx);
-        self.settings.palette = palette;
-        self.settings.save();
-        cx.notify();
-    }
 
     pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         if self.settings.mode == mode {

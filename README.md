@@ -12,7 +12,7 @@ in preview (detection, tweaks, presets, SDK install).
 
 ## Modes
 
-Toggle between modes from the title bar.
+Toggle between modes at the top of the navigation pane.
 
 - **Simple** (default): a MarkerPatch-style **One-Click Setup** plus a short **Quick Settings**
   page that saves as you change things. The setup bundle for BL2 includes:
@@ -92,13 +92,18 @@ closes).
 - **Minimize to background**: parks the app while the game plays — window minimized, UI
   sounds and music muted, near-zero redraw and timer work so it sips CPU and memory — and
   wakes back up when the game exits.
-- **Look and feel**: a dense desktop layout (Fluent metrics, Segoe UI, Lucide icons) with
-  Borderlands yellow as the accent. The game's own art is read from your PC: the Steam
-  library banner and logo head the Setup and Overview pages, and each game's exe icon
-  appears in the game switcher. Three palettes (Graphite, Pandora, Hyperion) and optional
-  button sounds from the game's launcher audio files (nothing is bundled).
-- **Window controls**: a custom-drawn title bar replaces the OS one — minimize, maximize
-  and close are handled by the app itself.
+- **Look and feel**: a native Windows 11 app. It follows your Windows light or dark mode
+  and accent color (live, as you change them), sits on Mica with acrylic menus, tooltips
+  and notifications, and uses the WinUI control
+  metrics, the Segoe UI Variable type ramp, Segoe Fluent Icons and Fluent motion (page
+  transitions, the navigation pill, dialogs, toasts). It honors Windows' "Animation
+  effects" setting. The navigation pane collapses to icons below 1008px wide or from the
+  menu button, and Back (Alt+Left or the mouse back button) retraces your pages. The
+  game's own art is read from your PC: the Steam library banner and logo head the Setup
+  and Overview pages, and each game's exe icon appears in the game switcher. Optional
+  button sounds come from the game's launcher audio files (nothing is bundled).
+- **Window controls**: the title bar's caption buttons are real Windows hit-test regions,
+  so Snap Layouts, double-click to maximize and dragging behave like any Windows app.
 - **Bundled comparison images**: our own Borderlands 2 screenshots are embedded in the exe,
   so there's no first-run download for them (see *Comparison images* above).
 - **Updates and support**: checks for a newer Vault Patcher and mod SDK at startup, and
@@ -120,8 +125,11 @@ logo and the comparison images are embedded, the C runtime is linked statically
 (`.cargo/config.toml`), and the app icon is rendered from `assets/brand/logo.svg` at build
 time. Everything else (mods, DXVK) is downloaded to the user's PC on demand.
 
-Requires Windows 10/11. Barlow Condensed is bundled under the OFL and the Lucide icons under
-ISC (`assets/icons/LICENSE-lucide.txt`); body text uses the system Segoe UI.
+Requires Windows 10/11; Mica needs Windows 11 22H2 or later (earlier versions get a solid
+background). Text uses the system Segoe UI Variable (Segoe UI on Windows 10) and icons are
+drawn from the installed Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10); neither is
+bundled. Noto Sans is bundled under the OFL as a fallback for PCs missing Segoe UI.
+Set `VAULT_PATCHER_THEME=light` or `dark` to preview a theme without changing Windows.
 
 ## Architecture
 
@@ -139,9 +147,12 @@ src/
   applied.rs   what Vault Patcher last wrote, so "Re-apply" can put it back
   profiles.rs  named settings profiles (JSON)
   compare.rs   bundled per-setting comparison images and the capture tool
-  app.rs       window shell: title bar, nav rail, page host, Apply bar, toasts, dialogs
-  theme.rs     palettes (mirrored into gpui-component), rarity colors, icons
+  app.rs       window shell: title bar, navigation pane, page host, Apply bar, toasts, dialogs
+  theme.rs     WinUI theme brushes (mirrored into gpui-component), rarity colors, icons
+  win11.rs     Windows theme and accent, Mica, animation setting, system icon glyphs
   ui.rs        widgets: buttons, switches, sliders, chips, setting rows
+vendor/        our fork of gpui and gpui-component (acrylic blur, scale transforms);
+               see vendor/README.md
 ```
 
 ### Adding a tweak
@@ -167,7 +178,6 @@ bl-sdk projects. Not affiliated with Gearbox Software or 2K.
 ## License
 
 Vault Patcher is free software under the [GNU General Public License v3.0 or later](LICENSE).
-Bundled assets keep their own licenses: Barlow Condensed (SIL OFL,
-`assets/fonts/Barlow-OFL.txt`) and Lucide icons (ISC, `assets/icons/LICENSE-lucide.txt`).
+Bundled assets keep their own licenses: Noto Sans (SIL OFL, `assets/fonts/NotoSans-OFL.txt`).
 Borderlands is a trademark of Gearbox Software; this project isn't affiliated with Gearbox
 or 2K.

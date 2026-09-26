@@ -144,7 +144,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             ))
             .child(
                 ui::panel().p(px(16.)).flex().items_center().gap(px(14.))
-                    .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).size(px(20.)).text_color(if locked { theme::accent() } else { theme::text_dim() }))
+                    .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).size(px(20.)).text_color(if locked { theme::accent_text() } else { theme::text_dim() }))
                     .child(div().flex_1().child(ui::body(if locked { "Config files are locked (read-only)." } else { "Config files are writable." })))
                     .child(
                         ui::toggle("lock-configs", locked)

@@ -91,7 +91,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .py(px(10.))
                 .child(
                     ui::icon(if original { Icon::Star } else { Icon::History })
-                        .text_color(if original { theme::accent() } else { theme::text_dim() }),
+                        .text_color(if original { theme::accent_text() } else { theme::text_dim() }),
                 )
                 .child(
                     div()

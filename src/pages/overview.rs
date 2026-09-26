@@ -119,7 +119,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .cursor_pointer()
             .hover(|s| s.bg(theme::panel_hi()))
             .child(ui::icon(icon).text_color(theme::text_dim()))
-            .child(div().flex_1().text_size(px(13.)).text_color(theme::text_muted()).child(label))
+            .child(div().flex_1().text_size(px(14.)).text_color(theme::text_muted()).child(label))
             .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(value))
             .child(ui::icon(Icon::ChevronRight).size(px(14.)).text_color(theme::text_dim()))
             .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.navigate(page, cx)))

@@ -16,15 +16,6 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let def = game.def;
 
     // ---- appearance & sound
-    let current = theme::palette();
-    let mut theme_chips = div().flex().gap(px(4.));
-    for palette in theme::Palette::ALL {
-        let ws = ws.clone();
-        theme_chips = theme_chips.child(
-            ui::chip(SharedString::from(format!("palette-{}", palette.label())), palette.label(), current == palette)
-                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.set_palette(palette, cx))),
-        );
-    }
     let muted = state.settings.sound_muted;
     let music = state.settings.music;
     let sounds = crate::sound::available();
@@ -33,7 +24,13 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let appearance = ui::panel()
         .flex()
         .flex_col()
-        .child(setting_row("Theme", "Graphite, the warm Pandora browns, or Hyperion navy. Yellow stays the accent.", theme_chips.into_any_element()))
+        .child(setting_row(
+            "Theme",
+            "Follows Windows: light or dark mode and your accent color, set in Personalization > Colors.",
+            ui::button("set-colors", "Windows color settings", Some(Icon::Link), Variant::Secondary)
+                .on_click(|_, _, cx| cx.open_url("ms-settings:colors"))
+                .into_any_element(),
+        ))
         .child(ui::divider())
         .child(setting_row(
             "Button sounds",
@@ -73,7 +70,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .flex()
                     .flex_col()
                     .child(ui::title(title))
-                    .child(div().font_family(theme::FONT_MONO).text_size(px(12.)).text_color(theme::text_dim()).truncate().child(value)),
+                    .child(div().font_family(theme::font_mono()).text_size(px(12.)).text_color(theme::text_dim()).truncate().child(value)),
             )
             .when_some(path, |d, p| {
                 d.child(

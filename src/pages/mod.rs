@@ -62,8 +62,8 @@ pub(crate) fn page_header(title: &str, subtitle: &str, actions: Vec<AnyElement>)
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(ui::display(title.to_string(), 26.))
-                .child(ui::body(subtitle.to_string()).max_w(px(760.)).text_color(theme::text_dim())),
+                .child(ui::display(title.to_string(), 28.))
+                .child(ui::body(subtitle.to_string()).max_w(px(760.))),
         )
         .child(div().flex().gap(px(8.)).children(actions))
 }
@@ -145,7 +145,7 @@ pub(crate) fn game_banner(ws: &Workspace, caption: String, actions: Vec<AnyEleme
                         .flex_col()
                         .gap(px(8.))
                         .child(div().flex().child(title))
-                        .child(div().text_size(px(12.5)).text_color(theme::text_muted()).truncate().child(caption)),
+                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(caption)),
                 )
                 .child(div().flex().gap(px(8.)).children(actions)),
         )

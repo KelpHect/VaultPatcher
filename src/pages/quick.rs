@@ -57,7 +57,7 @@ pub fn render(ws: &Entity<Workspace>, window: &mut Window, cx: &mut App) -> AnyE
                                 .items_center()
                                 .gap(px(6.))
                                 .child(div().size(px(8.)).rounded_full().bg(preset.rarity.color()))
-                                .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
+                                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
                                 .when(current, |d| d.child(ui::badge("Current", theme::success()))),
                         )
                         .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(preset.description))
@@ -74,7 +74,7 @@ pub fn render(ws: &Entity<Workspace>, window: &mut Window, cx: &mut App) -> AnyE
     view(
         ws,
         "Quick Settings",
-        "Saved as soon as you change them. Want every setting? Switch to Advanced in the title bar.",
+        "Saved as soon as you change them. Want every setting? Switch to Advanced at the top of the navigation pane.",
         groups,
         true,
         None,

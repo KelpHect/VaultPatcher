@@ -49,7 +49,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .child(div().text_size(px(14.5)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
+                                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
                                 .child(ui::badge(preset.rarity.label(), color))
                                 .when(current, |d| d.child(ui::badge("Current", theme::success()))),
                         )

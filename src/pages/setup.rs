@@ -110,9 +110,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(text))
+                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(text))
                 .child(div().h(px(4.)).w_full().rounded_full().bg(theme::panel_lo()).child(div().h_full().rounded_full().w(relative(fraction)).bg(color)))
-                .children(failed.into_iter().map(|f| div().text_size(px(12.5)).text_color(theme::text_muted()).child(f))),
+                .children(failed.into_iter().map(|f| div().text_size(px(12.)).text_color(theme::text_muted()).child(f))),
         );
     }
 
@@ -182,7 +182,7 @@ fn row(
         Status::Active(_) => Some(ui::badge("Installed", theme::success())),
         Status::Partial => Some(ui::badge("Partly applied", theme::warning())),
         Status::Blocked(_) => Some(ui::badge("Unavailable", theme::danger())),
-        Status::Missing if selected => Some(ui::badge("Will install", theme::accent())),
+        Status::Missing if selected => Some(ui::badge("Will install", theme::accent_text())),
         Status::Missing => None,
     };
     let note_color = match status {
@@ -213,7 +213,7 @@ fn row(
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(div().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(if checked { theme::text() } else { theme::text_muted() }).child(c.name))
+                        .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).text_color(if checked { theme::text() } else { theme::text_muted() }).child(c.name))
                         .child(div().text_size(px(12.)).text_color(theme::text_dim()).truncate().child(c.summary)),
                 )
                 .children(tag)
@@ -248,9 +248,9 @@ fn row(
                             Status::Active(Some(v)) => Some(format!("Installed version: {v}")),
                             _ => None,
                         },
-                        |d, note| d.child(div().text_size(px(12.5)).text_color(note_color).child(note)),
+                        |d, note| d.child(div().text_size(px(12.)).text_color(note_color).child(note)),
                     )
-                    .when(!needs.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(theme::text_dim()).child(format!("Needs: {}", needs.join(", "))))),
+                    .when(!needs.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(theme::text_dim()).child(format!("Needs: {}", needs.join(", "))))),
             )
         })
 }
