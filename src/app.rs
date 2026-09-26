@@ -36,6 +36,13 @@ impl Shell {
                     search_ws.update(cx, |ws, cx| ws.set_search(text, cx));
                 }
             }),
+            // Game-running background mode: ends when the window comes back,
+            // and the window comes back when the game exits.
+            cx.observe_window_activation(window, |this, window, cx| {
+                let active = window.is_window_active();
+                this.ws.update(cx, |ws, cx| ws.window_activation_changed(active, cx));
+            }),
+            cx.subscribe_in(&ws, window, |_, _, _: &crate::workspace::RunEvent, window, _| window.activate_window()),
         ];
         ws.update(cx, |ws, _| {
             ws.search_input = Some(search);
@@ -915,13 +922,16 @@ impl Render for Shell {
                 .or_else(|| def.nav_items(mode).next().copied());
             (state.page, def.id, nav)
         };
+        // The game is running: its own screen replaces the page and rail.
+        let running = self.ws.read(cx).show_running_screen();
         let page = match nav {
+            _ if running => pages::running::render(&self.ws, window, cx),
             Some(nav) => pages::render(&nav, &self.ws, window, cx),
             None => div().into_any_element(),
         };
         let scroll_id = SharedString::from(format!("page-{game_id}-{page_kind:?}"));
         // Two-pane pages scroll their own panes.
-        let content = if pages::fills_height(page_kind) {
+        let content = if running || pages::fills_height(page_kind) {
             div().flex_1().min_h_0().flex().flex_col().child(page)
         } else {
             div().flex_1().min_h_0().child(
@@ -938,7 +948,7 @@ impl Render for Shell {
         if window.focused(cx).is_none() {
             window.focus(&self.focus);
         }
-        let pending_bar = self.pending_bar(cx);
+        let pending_bar = self.pending_bar(cx).filter(|_| !running);
         let toast_bottom = 40. + if pending_bar.is_some() { 52. } else { 0. };
         let drop_ws = self.ws.clone();
         div()
@@ -970,7 +980,7 @@ impl Render for Shell {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.rail(cx))
+                    .when(!running, |d| d.child(self.rail(cx)))
                     .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(content).children(pending_bar)),
             )
             .child(self.status_bar(cx))

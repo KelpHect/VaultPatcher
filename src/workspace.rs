@@ -234,6 +234,12 @@ impl GameState {
         running
     }
 
+    /// Stores a fresh "is the game running" answer taken elsewhere (the
+    /// running watch polls off the UI thread), so `is_running` agrees.
+    fn note_running(&self, running: bool) {
+        self.running_cache.set(Some((std::time::Instant::now(), running)));
+    }
+
     fn reload_profiles(&mut self) {
         self.profiles = crate::profiles::list(self.def.id);
     }
@@ -296,6 +302,10 @@ pub struct Workspace {
     /// Per game: bumped on every Simple-mode edit; a pending auto-apply only
     /// runs if no newer edit for that game arrived in the meantime.
     autoapply_generation: Vec<u64>,
+    /// Game-running watch and background mode (see "game running" below).
+    run_watch: RunWatch,
+    /// The watch's timer loop; dropped (and stopped) with the workspace.
+    _run_poll: gpui::Task<()>,
 }
 
 impl Workspace {
@@ -335,10 +345,13 @@ impl Workspace {
             undo: None,
             next_toast: 0,
             autoapply_generation: vec![0; games::all().len()],
+            run_watch: RunWatch::default(),
+            _run_poll: Self::spawn_run_poll(cx),
         };
         for i in 0..ws.games.len() {
             ws.refresh_game(i);
         }
+        ws.run_watch.reset(ws.game().is_running());
         ws.fetch_comparison_packs(cx);
         ws.check_updates(cx);
         let probe = cx.background_executor().spawn(async { crate::core::gpu::dxvk_ready().is_ok() });
@@ -406,6 +419,10 @@ impl Workspace {
         if index < self.games.len() {
             if self.active != index {
                 crate::sound::play(crate::sound::Sound::Whoosh);
+                // The running watch follows the newly selected game.
+                if self.run_watch.reset(self.games[index].is_running()) {
+                    self.apply_run_audio();
+                }
             }
             self.active = index;
             if !self.games[index].def.nav_items(self.settings.mode).any(|n| n.kind == self.page) {
@@ -1878,6 +1895,161 @@ impl Workspace {
         }
     }
 
+    // ---- game running & background mode -----------------------------------------
+    //
+    // A timer loop checks whether the active game's exe is running (every 2s,
+    // every 10s in background mode) and notifies only when the answer
+    // changes. While it runs, the Shell swaps the page for the "game is
+    // running" screen (`pages/running.rs`). "Minimize to background" mutes
+    // UI audio and slows the loop; it ends when the window is brought back or
+    // the game exits.
+
+    /// The watch's loop. It holds only a weak handle, so it ends with the
+    /// workspace; the returned task is also kept on the workspace, so there
+    /// is exactly one loop, whatever game is selected.
+    fn spawn_run_poll(cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn(async move |this, cx| loop {
+            let Ok(delay) = this.read_with(cx, |ws, _| ws.run_watch.poll_interval()) else { break };
+            cx.background_executor().timer(delay).await;
+            let Ok((gi, exe)) = this.read_with(cx, |ws, _| (ws.active, ws.game().exe_path())) else { break };
+            // The process snapshot runs off the UI thread.
+            let running = match exe {
+                Some(exe) => cx.background_executor().spawn(async move { crate::compare::game_running(&exe) }).await,
+                None => false,
+            };
+            if this.update(cx, |ws, cx| ws.apply_run_poll(gi, running, cx)).is_err() {
+                break;
+            }
+        })
+    }
+
+    /// Folds a poll of game `gi` in; notifies only if something changed.
+    fn apply_run_poll(&mut self, gi: usize, running: bool, cx: &mut Context<Self>) {
+        self.games[gi].note_running(running);
+        // A result for a game that's no longer selected is stale.
+        if gi != self.active {
+            return;
+        }
+        match self.run_watch.observe(running) {
+            RunChange::None => {}
+            RunChange::Started => cx.notify(),
+            // A comparison capture starts and stops the game itself and
+            // reports on its own.
+            RunChange::Stopped { .. } if self.capture_running() => cx.notify(),
+            RunChange::Stopped { background } => {
+                let name = self.games[gi].def.name;
+                self.game_stopped(gi, background, format!("{name} closed \u{2014} you're back in control"), cx);
+            }
+        }
+    }
+
+    /// The game exited: restore audio and the window if it was in the
+    /// background, re-read everything (the game rewrites its settings on
+    /// exit), and say so.
+    fn game_stopped(&mut self, gi: usize, was_background: bool, message: String, cx: &mut Context<Self>) {
+        if was_background {
+            self.apply_run_audio();
+            cx.emit(RunEvent::BringToFront);
+        }
+        self.refresh_game(gi);
+        self.toast(ToastKind::Success, message, cx);
+    }
+
+    /// Sets UI audio for the current mode: silent in the background, else
+    /// the user's saved choices.
+    fn apply_run_audio(&self) {
+        let (muted, music) = run_audio(self.run_watch.background, &self.settings);
+        crate::sound::set_muted(muted);
+        crate::sound::set_music(music);
+    }
+
+    /// True while the "game is running" screen should replace the page.
+    /// Never over a comparison capture, which runs the game itself.
+    pub fn show_running_screen(&self) -> bool {
+        self.run_watch.shows_screen() && !self.capture_running()
+    }
+
+    /// "Keep working anyway": hide the running screen until the game stops.
+    pub fn dismiss_running_screen(&mut self, cx: &mut Context<Self>) {
+        self.run_watch.dismissed = true;
+        cx.notify();
+    }
+
+    /// Enters background mode. Returns false (and changes nothing) when the
+    /// game isn't running; the caller minimizes the window on true.
+    pub fn enter_background(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.run_watch.enter_background() {
+            return false;
+        }
+        self.apply_run_audio();
+        cx.notify();
+        true
+    }
+
+    /// The window gained or lost OS focus. Coming back after being seen
+    /// inactive ends background mode.
+    pub fn window_activation_changed(&mut self, active: bool, cx: &mut Context<Self>) {
+        if !self.run_watch.activation(active) {
+            return;
+        }
+        self.apply_run_audio();
+        // Catch up on what was skipped while in the background.
+        let gi = self.active;
+        self.refresh_game(gi);
+        let running = self.games[gi].exe_path().is_some_and(|p| crate::compare::game_running(&p));
+        self.apply_run_poll(gi, running, cx);
+        cx.notify();
+    }
+
+    /// Kills the active game's process (after the page confirmed it), then
+    /// re-reads its state.
+    pub fn force_close_game(&mut self, cx: &mut Context<Self>) {
+        let gi = self.active;
+        let game = &self.games[gi];
+        let name = game.def.name;
+        let Some(exe) = game.exe_path() else {
+            self.toast(ToastKind::Error, "Game install not found", cx);
+            return;
+        };
+        self.busy = Some(format!("Closing {name}\u{2026}"));
+        cx.notify();
+        let executor = cx.background_executor().clone();
+        let task = cx.background_executor().spawn(async move {
+            crate::compare::kill_game(&exe);
+            // taskkill returns once the kill is requested; give the process
+            // a moment to actually go.
+            for _ in 0..20 {
+                if !crate::compare::game_running(&exe) {
+                    return false;
+                }
+                executor.timer(Duration::from_millis(100)).await;
+            }
+            crate::compare::game_running(&exe)
+        });
+        cx.spawn(async move |this, cx| {
+            let still_running = task.await;
+            this.update(cx, |ws, cx| {
+                ws.busy = None;
+                ws.games[gi].note_running(still_running);
+                if still_running {
+                    ws.toast(ToastKind::Error, format!("Couldn't close {name} \u{2014} try quitting from the game"), cx);
+                    return;
+                }
+                let change = if gi == ws.active { ws.run_watch.observe(false) } else { RunChange::None };
+                match change {
+                    RunChange::Stopped { background } => ws.game_stopped(gi, background, format!("{name} was closed"), cx),
+                    // The poll already noticed, or another game is selected now.
+                    _ => {
+                        ws.refresh_game(gi);
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     // ---- misc --------------------------------------------------------------------
 
     pub fn update_settings(&mut self, f: impl FnOnce(&mut AppSettings), cx: &mut Context<Self>) {
@@ -1927,6 +2099,194 @@ impl Workspace {
     pub fn dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
         self.toasts.retain(|t| t.id != id);
         cx.notify();
+    }
+}
+
+// ---- game running & background mode: state ---------------------------------------
+
+/// Asks the window to come to the front (the game exited while Vault
+/// Patcher was minimized to the background).
+pub enum RunEvent {
+    BringToFront,
+}
+
+impl gpui::EventEmitter<RunEvent> for Workspace {}
+
+/// What the running watch knows about the selected game. Plain state, so the
+/// transitions are unit-tested.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RunWatch {
+    /// Last polled answer.
+    running: bool,
+    /// "Keep working anyway" was pressed during this run of the game.
+    dismissed: bool,
+    /// Minimized to the background while the game plays.
+    background: bool,
+    /// The window was seen inactive since entering background mode. Only an
+    /// activation after that ends it, so a focus event still in flight
+    /// from before the minimize can't cancel it straight away.
+    seen_inactive: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RunChange {
+    None,
+    Started,
+    /// The game exited; `background` says whether background mode ended with it.
+    Stopped { background: bool },
+}
+
+impl RunWatch {
+    fn poll_interval(&self) -> Duration {
+        if self.background { Duration::from_secs(10) } else { Duration::from_secs(2) }
+    }
+
+    fn shows_screen(&self) -> bool {
+        self.running && !self.dismissed
+    }
+
+    fn observe(&mut self, running: bool) -> RunChange {
+        if running == self.running {
+            return RunChange::None;
+        }
+        if running {
+            self.running = true;
+            return RunChange::Started;
+        }
+        let background = self.background;
+        *self = RunWatch::default();
+        RunChange::Stopped { background }
+    }
+
+    /// Starts over for a newly selected game. Returns true if this ended
+    /// background mode (so audio must be restored).
+    fn reset(&mut self, running: bool) -> bool {
+        let was_background = self.background;
+        *self = RunWatch { running, ..RunWatch::default() };
+        was_background
+    }
+
+    fn enter_background(&mut self) -> bool {
+        if !self.running || self.background {
+            return false;
+        }
+        self.background = true;
+        self.seen_inactive = false;
+        true
+    }
+
+    /// Returns true when this activation change ends background mode.
+    fn activation(&mut self, active: bool) -> bool {
+        if !self.background {
+            return false;
+        }
+        if !active {
+            self.seen_inactive = true;
+            return false;
+        }
+        if !self.seen_inactive {
+            return false;
+        }
+        self.background = false;
+        self.seen_inactive = false;
+        true
+    }
+}
+
+/// UI audio as (muted, music playing): silent in background mode, otherwise
+/// exactly what the user saved — never unconditionally unmuted.
+fn run_audio(background: bool, settings: &AppSettings) -> (bool, bool) {
+    if background {
+        (true, false)
+    } else {
+        (settings.sound_muted, settings.music && !settings.sound_muted)
+    }
+}
+
+#[cfg(test)]
+mod run_watch_tests {
+    use super::*;
+
+    #[test]
+    fn notices_start_and_stop_once() {
+        let mut w = RunWatch::default();
+        assert_eq!(w.observe(false), RunChange::None);
+        assert_eq!(w.observe(true), RunChange::Started);
+        assert_eq!(w.observe(true), RunChange::None);
+        assert!(w.shows_screen());
+        assert_eq!(w.observe(false), RunChange::Stopped { background: false });
+        assert_eq!(w.observe(false), RunChange::None);
+        assert!(!w.shows_screen());
+    }
+
+    #[test]
+    fn dismissal_lasts_until_the_game_stops() {
+        let mut w = RunWatch::default();
+        w.observe(true);
+        w.dismissed = true;
+        assert!(!w.shows_screen());
+        w.observe(false);
+        w.observe(true);
+        assert!(w.shows_screen());
+    }
+
+    #[test]
+    fn background_needs_a_running_game() {
+        let mut w = RunWatch::default();
+        assert!(!w.enter_background());
+        w.observe(true);
+        assert!(w.enter_background());
+        assert!(!w.enter_background());
+        assert_eq!(w.poll_interval(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn game_exit_ends_background() {
+        let mut w = RunWatch::default();
+        w.observe(true);
+        w.enter_background();
+        assert_eq!(w.observe(false), RunChange::Stopped { background: true });
+        assert!(!w.background);
+        assert_eq!(w.poll_interval(), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn restore_needs_deactivation_first() {
+        let mut w = RunWatch::default();
+        w.observe(true);
+        w.enter_background();
+        // A stale "active" from before the minimize is ignored.
+        assert!(!w.activation(true));
+        assert!(w.background);
+        assert!(!w.activation(false));
+        assert!(w.activation(true));
+        assert!(!w.background);
+        assert!(w.running);
+        // Outside background mode activation changes nothing.
+        assert!(!w.activation(false));
+        assert!(!w.activation(true));
+    }
+
+    #[test]
+    fn switching_games_reports_background_end() {
+        let mut w = RunWatch::default();
+        w.observe(true);
+        w.enter_background();
+        assert!(w.reset(false));
+        assert_eq!(w, RunWatch::default());
+        assert!(!w.reset(true));
+        assert!(w.running);
+    }
+
+    #[test]
+    fn audio_restores_saved_settings() {
+        let mut s = AppSettings::default();
+        assert_eq!(run_audio(true, &s), (true, false));
+        s.music = true;
+        assert_eq!(run_audio(false, &s), (false, true));
+        s.sound_muted = true;
+        assert_eq!(run_audio(false, &s), (true, false));
+        assert_eq!(run_audio(true, &s), (true, false));
     }
 }
 

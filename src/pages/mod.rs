@@ -11,6 +11,7 @@ mod overview;
 mod patches;
 mod presets;
 mod quick;
+pub(crate) mod running;
 mod settings;
 mod setup;
 mod tweaks;
