@@ -28,8 +28,19 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
   `Window::with_element_scale(origin, scale, f)`. Every primitive goes through
   `Window::insert_primitive`, which applies the current `ElementTransform`
   (quads, borders, shadows, backdrops, paths, underlines, text, icons, images).
-  Sprites stretch their rasterized tile, and layout and hit testing are
-  unchanged, so it's meant for short animations (dialog entrance 1.05 → 1).
+  Text and SVG icons are re-rasterized at the scaled size (in 1% steps, so an
+  animation reuses a few atlas entries) and stay sharp; images stretch. Layout
+  and hit testing are unchanged, so it's meant for animations (dialog entrance
+  1.05 → 1).
+- **Hover and press fades**: elements with hover/active styles fade their
+  solid background to the new color over 83 ms (WinUI's brush transition),
+  from wherever the fade is, so quick moves don't jump.
+- **Reduce motion**: `gpui::set_reduce_motion` / `gpui::reduce_motion()`
+  turns the fades off and lets components skip their animations.
+- **Focus visuals**: `InteractiveElement::focus_visible(style)` applies only
+  when focus arrived by keyboard (`Window::is_focus_visible`; set by Tab
+  navigation, cleared by any mouse press), and `Styled::outline` draws a ring
+  outside an element without affecting layout, with an optional inner ring.
 - Fixed two float-literal inference warnings in `taffy.rs`.
 
 ## gpui-component
@@ -37,3 +48,5 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
 - `StyledExt::popover_style` (menus, dropdowns, popovers) and tooltips are
   acrylic: a 30px backdrop blur under the theme's (translucent) `popover`
   color, with `radius_lg` overlay corners on flyouts.
+- Popup menus open with a flyout entrance (fade over 83 ms while settling
+  from 96% size), skipped under `gpui::reduce_motion()`.

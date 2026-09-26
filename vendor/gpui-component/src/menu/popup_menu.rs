@@ -1249,7 +1249,7 @@ impl Render for PopupMenu {
             radius: cx.theme().radius.min(px(8.)),
         };
 
-        v_flex()
+        let menu = v_flex()
             .id("popup-menu")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -1307,6 +1307,20 @@ impl Render for PopupMenu {
             .when(self.scrollable, |this| {
                 // TODO: When the menu is limited by `overflow_y_scroll`, the sub-menu will cannot be displayed.
                 this.vertical_scrollbar(&self.scroll_handle)
-            })
+            });
+
+        // Flyout entrance: fades in over the first 83 ms while settling from
+        // slightly smaller on the decelerate curve (hit testing is unaffected).
+        if gpui::reduce_motion() {
+            return menu.into_any_element();
+        }
+        gpui::AnimationExt::with_animation(
+            menu,
+            "popup-menu-open",
+            gpui::Animation::new(std::time::Duration::from_millis(250))
+                .with_easing(gpui::ease_out_quint()),
+            |menu, t| menu.opacity((t * 3.).min(1.)).transform_scale(0.96 + 0.04 * t),
+        )
+        .into_any_element()
     }
 }

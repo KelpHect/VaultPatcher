@@ -223,8 +223,7 @@ pub fn button(
         Variant::Ghost => (transparent, theme::text(), theme::panel_hi(), theme::panel_pressed(), transparent),
     };
     let pressed_fg = if variant == Variant::Primary { fg } else { theme::text_muted() };
-    div()
-        .id(id.into())
+    focusable(div().id(id.into()))
         .flex()
         .flex_none()
         .items_center()
@@ -249,8 +248,7 @@ pub fn button(
 
 /// A square icon-only subtle button (toolbars, list actions). Give it a tooltip.
 pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, color: Rgba) -> Stateful<gpui::Div> {
-    div()
-        .id(id.into())
+    focusable(div().id(id.into()))
         .flex()
         .flex_none()
         .items_center()
@@ -262,6 +260,13 @@ pub fn icon_button(id: impl Into<ElementId>, glyph: Icon, color: Rgba) -> Statef
         .active(|s| s.bg(theme::panel_pressed()))
         .child(icon(glyph).text_color(color))
         .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
+}
+
+/// Makes a control a Tab stop with the Windows focus visual: a 2px ring over
+/// a 1px inner ring, just outside the control, shown only after keyboard
+/// navigation. Enter and Space then click it.
+pub fn focusable(control: Stateful<gpui::Div>) -> Stateful<gpui::Div> {
+    control.tab_index(0).focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(1.), Some(theme::focus_stroke_inner().into())))
 }
 
 /// Attaches a plain-text tooltip.
@@ -288,8 +293,7 @@ pub fn toggle(id: impl Into<SharedString>, on: bool) -> Stateful<gpui::Div> {
         knob.left(px(if on { 23. } else { 3. })).into_any_element()
     };
     let mark_id = id.clone();
-    div()
-        .id(ElementId::Name(id))
+    focusable(div().id(ElementId::Name(id)))
         .relative()
         .flex_none()
         .w(px(40.))
@@ -420,8 +424,7 @@ pub fn slider(
 
 /// One option of a set, drawn as a ToggleButton (accent when selected).
 pub fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, selected: bool) -> Stateful<gpui::Div> {
-    div()
-        .id(id.into())
+    focusable(div().id(id.into()))
         .flex_none()
         .px(px(12.))
         .h(px(32.))
@@ -456,8 +459,7 @@ pub fn segmented(items: Vec<(SharedString, SharedString, bool)>) -> (gpui::Div, 
     let segments = items
         .into_iter()
         .map(|(id, text, selected)| {
-            div()
-                .id(ElementId::Name(id))
+            focusable(div().id(ElementId::Name(id)))
                 .relative()
                 .flex()
                 .items_center()

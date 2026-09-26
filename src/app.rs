@@ -183,8 +183,7 @@ impl Shell {
             .items_center()
             .child(div().w(px(4.)).flex_none())
             .child(
-                div()
-                    .id("back")
+                ui::focusable(div().id("back"))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -198,8 +197,7 @@ impl Shell {
                     .on_click(back),
             )
             .child(
-                div()
-                    .id("pane-toggle")
+                ui::focusable(div().id("pane-toggle"))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -569,8 +567,7 @@ impl Shell {
         } else {
             pill.top(px(10.)).h(px(16.)).into_any_element()
         };
-        div()
-            .id(ElementId::Name(id))
+        ui::focusable(div().id(ElementId::Name(id)))
             .relative()
             .mx(px(4.))
             .my(px(2.))

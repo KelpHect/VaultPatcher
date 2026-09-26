@@ -664,6 +664,25 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Draws a ring outside this element without changing its layout (see
+    /// [`crate::Outline`]), e.g. `.outline(px(2.), outer, px(1.), Some(inner))`
+    /// for the Windows focus visual.
+    fn outline(
+        mut self,
+        width: crate::Pixels,
+        color: impl Into<crate::Hsla>,
+        offset: crate::Pixels,
+        inner_color: Option<crate::Hsla>,
+    ) -> Self {
+        self.style().outline = Some(crate::Outline {
+            width,
+            color: color.into(),
+            offset,
+            inner_color,
+        });
+        self
+    }
+
     /// Sets the opacity of this element and its children.
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);

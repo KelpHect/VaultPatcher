@@ -209,6 +209,10 @@ pub fn flyout_stroke() -> Rgba {
 pub fn focus_stroke() -> Rgba {
     pick(0x000000e4, 0xffffffff)
 }
+/// FocusStrokeColorInner: the thin ring inside it.
+pub fn focus_stroke_inner() -> Rgba {
+    pick(0xffffffb3, 0x000000b3)
+}
 
 // ---- text ---------------------------------------------------------------------
 
@@ -372,6 +376,8 @@ pub fn apply(cx: &mut App) {
     let h = |c: Rgba| -> Hsla { c.into() };
     let mode = if is_dark() { gpui_component::ThemeMode::Dark } else { gpui_component::ThemeMode::Light };
     gpui_component::Theme::change(mode, None, cx);
+    // Hover and press fades follow Windows' "Animation effects" too.
+    gpui::set_reduce_motion(!motion());
     let theme = gpui_component::Theme::global_mut(cx);
     theme.font_family = font_body();
     theme.font_size = px(14.);

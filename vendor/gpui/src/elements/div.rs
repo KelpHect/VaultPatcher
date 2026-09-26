@@ -23,7 +23,7 @@ use crate::{
     MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow,
     ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
     StyleRefinement, Styled, Task, TooltipId, Visibility, Window, WindowControlArea, point, px,
-    size,
+    size, BackgroundTag, Fill, Hsla, Rgba, transparent_black,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -38,7 +38,7 @@ use std::{
     mem,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use util::ResultExt;
 
@@ -1025,6 +1025,17 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Set the given styles to be applied when this element is focused by
+    /// keyboard navigation (like CSS `:focus-visible`), e.g. a focus ring.
+    /// Requires that the element is focusable.
+    fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().focus_visible_style = Some(Box::new(f(StyleRefinement::default())));
+        self
+    }
+
     /// Set the given styles to be applied when this element is inside another element that is focused.
     /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
     fn in_focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
@@ -1496,6 +1507,7 @@ pub struct Interactivity {
     /// by focus, active, etc.
     pub base_style: Box<StyleRefinement>,
     pub(crate) focus_style: Option<Box<StyleRefinement>>,
+    pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
     pub(crate) hover_style: Option<Box<StyleRefinement>>,
     pub(crate) group_hover_style: Option<GroupStyle>,
@@ -2492,6 +2504,13 @@ impl Interactivity {
             {
                 style.refine(focus_style);
             }
+
+            if let Some(focus_visible_style) = self.focus_visible_style.as_ref()
+                && window.is_focus_visible()
+                && focus_handle.is_focused(window)
+            {
+                style.refine(focus_visible_style);
+            }
         }
 
         if let Some(hitbox) = hitbox {
@@ -2541,20 +2560,56 @@ impl Interactivity {
         }
 
         if let Some(element_state) = element_state {
-            let clicked_state = element_state
-                .clicked_state
-                .get_or_insert_with(Default::default)
-                .borrow();
-            if clicked_state.group
-                && let Some(group) = self.group_active_style.as_ref()
             {
-                style.refine(&group.style)
+                let clicked_state = element_state
+                    .clicked_state
+                    .get_or_insert_with(Default::default)
+                    .borrow();
+                if clicked_state.group
+                    && let Some(group) = self.group_active_style.as_ref()
+                {
+                    style.refine(&group.style)
+                }
+
+                if let Some(active_style) = self.active_style.as_ref()
+                    && clicked_state.element
+                {
+                    style.refine(active_style)
+                }
             }
 
-            if let Some(active_style) = self.active_style.as_ref()
-                && clicked_state.element
-            {
-                style.refine(active_style)
+            // Fade solid backgrounds between rest, hover and pressed.
+            let reacts = self.hover_style.is_some()
+                || self.group_hover_style.is_some()
+                || self.active_style.is_some()
+                || self.group_active_style.is_some();
+            if reacts && !reduce_motion() {
+                let solid = |fill: &Fill| fill.color().filter(|c| c.tag == BackgroundTag::Solid);
+                let target = style
+                    .background
+                    .as_ref()
+                    .and_then(solid)
+                    .map(|c| c.solid)
+                    .unwrap_or_else(transparent_black);
+                let cell = element_state
+                    .background_transition
+                    .get_or_insert_with(Default::default);
+                let mut transition = cell.borrow_mut();
+                let now = Instant::now();
+                match transition.as_mut() {
+                    None => *transition = Some(BackgroundTransition::settled(target)),
+                    Some(t) if t.to != target => *t = t.retarget(target, now),
+                    Some(_) => {}
+                }
+                if let Some(color) = transition.as_ref().and_then(|t| t.in_flight(now))
+                    && style
+                        .background
+                        .as_ref()
+                        .is_none_or(|fill| solid(fill).is_some())
+                {
+                    style.background = Some(Fill::from(color));
+                    window.request_animation_frame();
+                }
             }
         }
 
@@ -2562,10 +2617,92 @@ impl Interactivity {
     }
 }
 
+static REDUCE_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// App-wide "reduce motion" (e.g. Windows' Animation effects turned off):
+/// hover and press fades stop, and components can check [`reduce_motion`]
+/// to skip their own animations. Off by default.
+pub fn set_reduce_motion(reduce: bool) {
+    REDUCE_MOTION.store(reduce, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the app asked for reduced motion (see [`set_reduce_motion`]).
+pub fn reduce_motion() -> bool {
+    REDUCE_MOTION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How long a background takes to follow hover and press changes (WinUI's
+/// brush transition).
+const BACKGROUND_TRANSITION: Duration = Duration::from_millis(83);
+
+/// A solid background fading between two colors.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BackgroundTransition {
+    from: Hsla,
+    to: Hsla,
+    started: Instant,
+}
+
+impl BackgroundTransition {
+    fn settled(color: Hsla) -> Self {
+        Self {
+            from: color,
+            to: color,
+            started: Instant::now() - BACKGROUND_TRANSITION,
+        }
+    }
+
+    /// Heads for `to`, starting from wherever the fade is now so quick
+    /// hover changes don't jump.
+    fn retarget(&self, to: Hsla, now: Instant) -> Self {
+        Self {
+            from: self.color_at(now),
+            to,
+            started: now,
+        }
+    }
+
+    fn progress(&self, now: Instant) -> f32 {
+        (now.saturating_duration_since(self.started).as_secs_f32()
+            / BACKGROUND_TRANSITION.as_secs_f32())
+        .min(1.)
+    }
+
+    fn color_at(&self, now: Instant) -> Hsla {
+        let t = self.progress(now);
+        if t >= 1. {
+            return self.to;
+        }
+        // Mix in RGB: hue interpolation would sweep through other colors,
+        // and a transparent end keeps the other end's color while it fades.
+        let from = self.from.to_rgb();
+        let to = self.to.to_rgb();
+        let (from_rgb, to_rgb) = match (self.from.a == 0., self.to.a == 0.) {
+            (true, false) => (to, to),
+            (false, true) => (from, from),
+            _ => (from, to),
+        };
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        Rgba {
+            r: mix(from_rgb.r, to_rgb.r),
+            g: mix(from_rgb.g, to_rgb.g),
+            b: mix(from_rgb.b, to_rgb.b),
+            a: mix(from.a, to.a),
+        }
+        .into()
+    }
+
+    /// The color to show while fading, or None once it has arrived.
+    fn in_flight(&self, now: Instant) -> Option<Hsla> {
+        (self.progress(now) < 1.).then(|| self.color_at(now))
+    }
+}
+
 /// The per-frame state of an interactive element. Used for tracking stateful interactions like clicks
 /// and scroll offsets.
 #[derive(Default)]
 pub struct InteractiveElementState {
+    pub(crate) background_transition: Option<Rc<RefCell<Option<BackgroundTransition>>>>,
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) clicked_state: Option<Rc<RefCell<ElementClickedState>>>,
     pub(crate) hover_state: Option<Rc<RefCell<bool>>>,

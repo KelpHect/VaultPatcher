@@ -9,7 +9,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
-    point, quad, rems, size,
+    point, quad, rems, size, transparent_black,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -258,6 +258,10 @@ pub struct Style {
     /// Paint the element and its children scaled around its center. Layout
     /// and hit testing are unaffected (use it for animations).
     pub transform_scale: Option<f32>,
+
+    /// A ring drawn outside the element without affecting layout (focus
+    /// visuals).
+    pub outline: Option<Outline>,
 
     /// The text style of this element
     pub text: TextStyleRefinement,
@@ -742,6 +746,10 @@ impl Style {
             );
         }
 
+        if let Some(outline) = self.outline.as_ref() {
+            outline.paint(bounds, corner_radii, window);
+        }
+
         #[cfg(debug_assertions)]
         if self.debug_below {
             cx.remove_global::<DebugBelow>();
@@ -752,6 +760,47 @@ impl Style {
         self.border_color
             .is_some_and(|color| !color.is_transparent())
             && self.border_widths.any(|length| !length.is_zero())
+    }
+}
+
+/// A ring drawn around an element, outside its bounds (like CSS `outline`),
+/// optionally with a thinner inner ring: the Windows focus visual is a 2px
+/// outer ring over a 1px inner one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Outline {
+    /// Width of the outer ring.
+    pub width: Pixels,
+    /// Color of the outer ring.
+    pub color: Hsla,
+    /// Gap between the element's edge and the ring (where the inner ring goes).
+    pub offset: Pixels,
+    /// Color of a 1px ring filling the offset next to the element, if any.
+    pub inner_color: Option<Hsla>,
+}
+
+impl Outline {
+    fn paint(&self, bounds: Bounds<Pixels>, corner_radii: Corners<Pixels>, window: &mut Window) {
+        let ring = |inset: Pixels, width: Pixels, color: Hsla, window: &mut Window| {
+            let grow = |r: Pixels| if r > Pixels::ZERO { r + inset } else { r };
+            let radii = Corners {
+                top_left: grow(corner_radii.top_left),
+                top_right: grow(corner_radii.top_right),
+                bottom_right: grow(corner_radii.bottom_right),
+                bottom_left: grow(corner_radii.bottom_left),
+            };
+            window.paint_quad(quad(
+                bounds.dilate(inset),
+                radii,
+                transparent_black(),
+                Edges::all(width),
+                color,
+                BorderStyle::Solid,
+            ));
+        };
+        if let Some(inner) = self.inner_color {
+            ring(self.offset, self.offset, inner, window);
+        }
+        ring(self.offset + self.width, self.width, self.color, window);
     }
 }
 
@@ -795,6 +844,7 @@ impl Default for Style {
             box_shadow: Default::default(),
             backdrop_blur: None,
             transform_scale: None,
+            outline: None,
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

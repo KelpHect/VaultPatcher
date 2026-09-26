@@ -221,6 +221,12 @@ impl ElementTransform {
         *self == Self::IDENTITY
     }
 
+    /// The scale to rasterize text and icons at, in 1% steps so an animation
+    /// reuses a handful of atlas entries instead of adding some every frame.
+    pub fn raster_scale(&self) -> f32 {
+        (self.scale * 100.).round().max(1.) / 100.
+    }
+
     /// This transform, then `scale` around `origin` inside it.
     pub fn then_scale(&self, origin: Point<ScaledPixels>, scale: f32) -> Self {
         Self {
@@ -232,7 +238,7 @@ impl ElementTransform {
         }
     }
 
-    fn point(&self, p: Point<ScaledPixels>) -> Point<ScaledPixels> {
+    pub fn point(&self, p: Point<ScaledPixels>) -> Point<ScaledPixels> {
         point(
             ScaledPixels(p.x.0 * self.scale + self.offset.x.0),
             ScaledPixels(p.y.0 * self.scale + self.offset.y.0),
@@ -253,7 +259,7 @@ impl ElementTransform {
         }
     }
 
-    fn mask(&self, m: &ContentMask<ScaledPixels>) -> ContentMask<ScaledPixels> {
+    pub fn mask(&self, m: &ContentMask<ScaledPixels>) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.bounds(m.bounds),
         }

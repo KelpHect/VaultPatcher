@@ -869,6 +869,8 @@ pub struct Window {
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
     focus_enabled: bool,
+    /// Focus last moved by keyboard (Tab), so focus rings should show.
+    focus_visible: bool,
     pending_input: Option<PendingInput>,
     pending_modifier: ModifierState,
     pub(crate) pending_input_observers: SubscriberSet<(), AnyObserver>,
@@ -1253,6 +1255,7 @@ impl Window {
             activation_observers: SubscriberSet::new(),
             focus: None,
             focus_enabled: true,
+            focus_visible: false,
             pending_input: None,
             pending_modifier: ModifierState::default(),
             pending_input_observers: SubscriberSet::new(),
@@ -1412,11 +1415,18 @@ impl Window {
         self.focus_enabled = false;
     }
 
+    /// Whether focus last moved by keyboard navigation, so focus visuals
+    /// should show (like CSS `:focus-visible`). Any mouse press clears it.
+    pub fn is_focus_visible(&self) -> bool {
+        self.focus_visible
+    }
+
     /// Move focus to next tab stop.
     pub fn focus_next(&mut self) {
         if !self.focus_enabled {
             return;
         }
+        self.focus_visible = true;
 
         if let Some(handle) = self.rendered_frame.tab_stops.next(self.focus.as_ref()) {
             self.focus(&handle)
@@ -1428,6 +1438,7 @@ impl Window {
         if !self.focus_enabled {
             return;
         }
+        self.focus_visible = true;
 
         if let Some(handle) = self.rendered_frame.tab_stops.prev(self.focus.as_ref()) {
             self.focus(&handle)
@@ -3015,8 +3026,11 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let element_opacity = self.element_opacity();
-        let scale_factor = self.scale_factor();
-        let glyph_origin = origin.scale(scale_factor);
+        // Under a scale transform, rasterize at the scaled size (and place
+        // the glyph there) so scaled text stays sharp instead of stretching.
+        let transform = self.element_transform;
+        let scale_factor = self.scale_factor() * transform.raster_scale();
+        let glyph_origin = transform.point(origin.scale(self.scale_factor()));
 
         let subpixel_variant = Point {
             x: (glyph_origin.x.0.fract() * SUBPIXEL_VARIANTS_X as f32).floor() as u8,
@@ -3044,8 +3058,9 @@ impl Window {
                 origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
-            let content_mask = self.content_mask().scale(scale_factor);
-            self.insert_primitive(MonochromeSprite {
+            let content_mask = transform.mask(&self.content_mask().scale(self.scale_factor()));
+            // Already placed in transformed space.
+            self.next_frame.scene.insert_primitive(MonochromeSprite {
                 order: 0,
                 pad: 0,
                 bounds,
@@ -3134,7 +3149,9 @@ impl Window {
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
 
-        let bounds = bounds.scale(scale_factor);
+        // Under a scale transform, render the icon at its scaled size.
+        let transform = self.element_transform;
+        let bounds = transform.bounds(bounds.scale(scale_factor));
         let params = RenderSvgParams {
             path,
             size: bounds.size.map(|pixels| {
@@ -3153,7 +3170,7 @@ impl Window {
         else {
             return Ok(());
         };
-        let content_mask = self.content_mask().scale(scale_factor);
+        let content_mask = transform.mask(&self.content_mask().scale(scale_factor));
         let svg_bounds = Bounds {
             origin: bounds.center()
                 - Point::new(
@@ -3166,7 +3183,7 @@ impl Window {
                 .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
         };
 
-        self.insert_primitive(MonochromeSprite {
+        self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
             pad: 0,
             bounds: svg_bounds
@@ -3655,6 +3672,10 @@ impl Window {
             PlatformInput::MouseDown(mouse_down) => {
                 self.mouse_position = mouse_down.position;
                 self.modifiers = mouse_down.modifiers;
+                if self.focus_visible {
+                    self.focus_visible = false;
+                    self.refresh();
+                }
                 PlatformInput::MouseDown(mouse_down)
             }
             PlatformInput::MouseUp(mouse_up) => {
