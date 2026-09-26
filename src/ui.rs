@@ -412,6 +412,9 @@ pub struct SliderSpec {
     pub accent: Rgba,
 }
 
+/// A slider's commit callback, shared by its pointer and key handlers.
+type Commit = Rc<dyn Fn(f32, &mut Window, &mut App)>;
+
 /// Rail inset: the thumb's radius, so its center reaches both rail ends.
 const THUMB_R: f32 = 9.;
 
@@ -447,7 +450,7 @@ pub fn slider(
     let show_tip = dragging || state.tip_until.is_some_and(|t| Instant::now() < t);
     let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
     let on_start = Rc::new(on_start);
-    let on_commit: Rc<dyn Fn(f32, &mut Window, &mut App)> = Rc::new(on_commit);
+    let on_commit: Commit = Rc::new(on_commit);
 
     // Pointer → fraction along the rail (inset by the thumb radius), with
     // the default acting as a magnet within 4px unless Alt is held.
@@ -480,7 +483,7 @@ pub fn slider(
     let bounds_down = bounds.clone();
     let (down_id, move_id, up_id, out_id, key_id) = (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
     let (commit_down, commit_up, commit_out, commit_key) = (on_commit.clone(), on_commit.clone(), on_commit.clone(), on_commit);
-    let end_drag = |id: &SharedString, commit: &Rc<dyn Fn(f32, &mut Window, &mut App)>, window: &mut Window, cx: &mut App| {
+    let end_drag = |id: &SharedString, commit: &Commit, window: &mut Window, cx: &mut App| {
         let state = slider_state(id);
         update_slider(id, |s| {
             s.preview = None;
