@@ -122,7 +122,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
 
     if def.mods.is_some() && game.install.is_some() {
         match &game.sdk {
-            SdkStatus::Installed(v) => match ws.updates.sdk.as_deref() {
+            SdkStatus::Installed(v) => match ws.sdk_update_available() {
                 Some(latest) if latest != v => out.push(check(
                     Level::Warn,
                     format!("Mod SDK update: {v} → {latest}"),

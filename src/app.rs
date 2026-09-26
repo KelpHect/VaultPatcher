@@ -47,6 +47,9 @@ impl Shell {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings  (Ctrl+F)"));
         let profile = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
         let search_ws = ws.clone();
+        // Closing mid-capture or mid-install would leave the game half-changed.
+        let close_ws = ws.clone();
+        window.on_window_should_close(cx, move |_, cx| close_ws.update(cx, |ws, cx| ws.allow_close(cx)));
         let subs = vec![
             cx.observe(&ws, |_, _, cx| cx.notify()),
             cx.subscribe(&search, move |_, input, ev: &InputEvent, cx| {

@@ -413,7 +413,12 @@ fn read_fps_target(c: &ConfigSet) -> Option<Value> {
             if read_bool(c, &key(E, ENGINE, "bSmoothFrameRate")) == Some(false) {
                 Value::Choice("0")
             } else {
-                match_choice(FPS_TARGETS, c.get(&key(E, ENGINE, "MaxSmoothedFrameRate")).unwrap_or("62"))
+                match c.get(&key(E, ENGINE, "MaxSmoothedFrameRate")).unwrap_or("62").trim() {
+                    // The shipped smoothed range (22–62) is the stock ~60 cap:
+                    // factory settings (`fps_lock` "0") read as this control's default.
+                    "62" => Value::Choice("60"),
+                    max => match_choice(FPS_TARGETS, max),
+                }
             }
         }
         other => Value::Unknown(format!("mode {other}")),

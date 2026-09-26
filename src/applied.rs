@@ -144,13 +144,7 @@ fn load_from(path: &Path) -> Applied {
 /// Writes via a temp file and a rename, so a crash or a full disk can't
 /// leave half a record behind.
 fn save_to(path: &Path, applied: &Applied) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(applied)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::core::atomic::write(path, &serde_json::to_vec_pretty(applied)?)
 }
 
 /// Loads the record for this settings folder and install, changes it with

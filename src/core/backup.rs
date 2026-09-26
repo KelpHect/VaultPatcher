@@ -27,7 +27,12 @@ pub struct Backup {
     pub dir: PathBuf,
 }
 
+/// Where Vault Patcher keeps its settings, records and backups. Tests use a
+/// throwaway folder so they never touch the real one.
 pub fn data_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join("vaultpatcher-test-data");
+    }
     dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("VaultPatcher")
@@ -73,8 +78,41 @@ pub fn create(game_id: &str, label: &str, files: &[PathBuf]) -> Result<Backup> {
         files: entries,
         dir: dir.clone(),
     };
-    std::fs::write(dir.join("manifest.json"), serde_json::to_vec_pretty(&backup)?)?;
+    super::atomic::write(&dir.join("manifest.json"), &serde_json::to_vec_pretty(&backup)?)?;
     Ok(backup)
+}
+
+/// A path as Windows compares it, for matching backup entries.
+fn path_key(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
+/// Adds the `files` a snapshot doesn't hold yet to it, so restoring it puts
+/// them back too. Missing files are recorded as created.
+pub fn add_files(backup: &mut Backup, files: &[PathBuf]) -> Result<()> {
+    for original in files {
+        if backup.files.iter().any(|f| path_key(&f.original) == path_key(original)) {
+            continue;
+        }
+        let name = original.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        let stored_as = format!("{:02}_{name}", backup.files.len());
+        let created = !original.exists();
+        if !created {
+            std::fs::copy(original, backup.dir.join(&stored_as))
+                .with_context(|| format!("backing up {}", original.display()))?;
+        }
+        backup.files.push(BackupEntry { stored_as, original: original.clone(), created });
+    }
+    super::atomic::write(&backup.dir.join("manifest.json"), &serde_json::to_vec_pretty(&*backup)?)
+}
+
+/// The `files` a snapshot holds no copy of.
+pub fn missing_from(backup: &Backup, files: &[PathBuf]) -> Vec<PathBuf> {
+    files
+        .iter()
+        .filter(|f| !backup.files.iter().any(|b| path_key(&b.original) == path_key(f)))
+        .cloned()
+        .collect()
 }
 
 /// Label of the permanent snapshot taken before Vault Patcher first changes

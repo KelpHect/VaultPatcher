@@ -529,6 +529,8 @@ struct RestoreOnDrop {
     snapshot: backup::Backup,
     helper: PathBuf,
     helper_settings: PathBuf,
+    /// Game whose "capture in progress" marker this run wrote.
+    marker_game: String,
 }
 
 impl RestoreOnDrop {
@@ -538,8 +540,57 @@ impl RestoreOnDrop {
         let result = backup::restore(&self.snapshot).context("restoring your settings after capture");
         let _ = fs::remove_dir_all(&self.helper);
         let _ = fs::remove_file(&self.helper_settings);
+        // Put back: the next start no longer has anything to recover.
+        if result.is_ok() {
+            fs::remove_file(marker_path(&self.marker_game)).ok();
+        }
         result
     }
+}
+
+/// What an unfinished capture changed, written before it touches anything.
+/// If the app is closed or killed mid-run (so `RestoreOnDrop` never runs),
+/// the next start finds it and puts everything back.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CaptureMarker {
+    exe: PathBuf,
+    snapshot: PathBuf,
+    helper: PathBuf,
+    helper_settings: PathBuf,
+}
+
+fn marker_path(game_id: &str) -> PathBuf {
+    backup::data_dir().join("captures").join(format!("{game_id}.json"))
+}
+
+/// Undoes every comparison capture that didn't finish last time (the app
+/// was closed or crashed mid-run): restores the settings snapshot and removes
+/// the helper mod. Returns one line per game, saying what happened.
+pub fn recover_interrupted() -> Vec<Result<String>> {
+    let Ok(entries) = fs::read_dir(backup::data_dir().join("captures")) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| recover_one(&p))
+        .collect()
+}
+
+fn recover_one(marker: &Path) -> Result<String> {
+    let text = fs::read_to_string(marker).context("reading the unfinished capture's record")?;
+    let Ok(m) = serde_json::from_str::<CaptureMarker>(&text) else {
+        fs::remove_file(marker).ok();
+        bail!("an unfinished comparison capture left a damaged record; restore \"Before comparison capture\" from Backups if your settings look wrong");
+    };
+    if game_running(&m.exe) {
+        bail!("a comparison capture didn't finish; close the game and restart Vault Patcher to put your settings back");
+    }
+    let snapshot = backup::load(&m.snapshot).context("the unfinished capture's settings snapshot is gone")?;
+    backup::restore(&snapshot).context("putting your settings back after an unfinished capture")?;
+    let _ = fs::remove_dir_all(&m.helper);
+    let _ = fs::remove_file(&m.helper_settings);
+    fs::remove_file(marker).ok();
+    Ok("A comparison capture didn't finish last time; your settings were put back".into())
 }
 
 impl Drop for RestoreOnDrop {
@@ -561,25 +612,34 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
         bail!("close the game before starting a capture");
     }
     let helper = req.root.join(HELPER_DIR);
-    fs::create_dir_all(&helper)?;
-    fs::write(helper.join("__init__.py"), HELPER_PY)?;
-    // New SDK mods start disabled; this settings file switches the helper on.
     let helper_settings = req.root.join("sdk_mods").join("settings").join("vault_capture.json");
-    fs::create_dir_all(helper_settings.parent().expect("has parent"))?;
-    fs::write(&helper_settings, "{\n    \"enabled\": true\n}\n")?;
 
     // One snapshot of the configs up front — including files that don't exist
     // yet, so any the capture creates are removed again — restored no matter
     // how the run ends.
     let config_paths: Vec<PathBuf> = req.ini_files.iter().map(|(_, n)| req.config_dir.join(n)).collect();
     let snapshot = backup::create(req.game_id, "Before comparison capture", &config_paths)?;
+    let marker = CaptureMarker {
+        exe: req.exe.clone(),
+        snapshot: snapshot.dir.clone(),
+        helper: helper.clone(),
+        helper_settings: helper_settings.clone(),
+    };
     let mut guard = RestoreOnDrop {
         armed: true,
         exe: req.exe.clone(),
         snapshot,
         helper: helper.clone(),
         helper_settings: helper_settings.clone(),
+        marker_game: req.game_id.to_string(),
     };
+    crate::core::atomic::write(&marker_path(req.game_id), &serde_json::to_vec_pretty(&marker)?)
+        .context("recording the capture so it can be undone")?;
+    fs::create_dir_all(&helper)?;
+    fs::write(helper.join("__init__.py"), HELPER_PY)?;
+    // New SDK mods start disabled; this settings file switches the helper on.
+    fs::create_dir_all(helper_settings.parent().expect("has parent"))?;
+    fs::write(&helper_settings, "{\n    \"enabled\": true\n}\n")?;
     let original = ConfigSet::load(&req.config_dir, req.ini_files);
     if let Some(f) = original.unreadable().next() {
         bail!("{} couldn't be read; close the game and try again", f.path.display());
@@ -925,7 +985,40 @@ mod run_tests {
         assert!(!config_dir.join("WillowGame.ini").exists(), "files the capture created are removed");
         assert!(!root.join(HELPER_DIR).exists());
         assert!(progress.lock().unwrap().finished);
+        assert!(!marker_path("test-capture").exists(), "nothing left to recover");
         for b in backup::list("test-capture") {
+            let _ = backup::delete(&b);
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The app died mid-capture: the next start puts the settings back from
+    /// the marker and removes the helper.
+    #[test]
+    fn an_interrupted_capture_is_undone_on_the_next_start() {
+        let game = "test-capture-recover";
+        let base = std::env::temp_dir().join("vaultpatcher-capture-recover");
+        let _ = fs::remove_dir_all(&base);
+        let ini = base.join("Config/WillowEngine.ini");
+        let helper = base.join("Game").join(HELPER_DIR);
+        let helper_settings = base.join("Game/sdk_mods/settings/vault_capture.json");
+        fs::create_dir_all(ini.parent().unwrap()).unwrap();
+        fs::write(&ini, "[SystemSettings]\r\nFullscreen=True\r\n").unwrap();
+        let snapshot = backup::create(game, "Before comparison capture", std::slice::from_ref(&ini)).unwrap();
+        let marker = CaptureMarker { exe: base.join("Game/Missing.exe"), snapshot: snapshot.dir.clone(), helper: helper.clone(), helper_settings: helper_settings.clone() };
+        crate::core::atomic::write(&marker_path(game), &serde_json::to_vec(&marker).unwrap()).unwrap();
+        // Mid-shot state when the process died.
+        fs::write(&ini, "[SystemSettings]\r\nFullscreen=False\r\n").unwrap();
+        fs::create_dir_all(&helper).unwrap();
+        fs::write(helper.join("__init__.py"), "x").unwrap();
+        fs::create_dir_all(helper_settings.parent().unwrap()).unwrap();
+        fs::write(&helper_settings, "{}").unwrap();
+
+        recover_one(&marker_path(game)).unwrap();
+        assert_eq!(fs::read_to_string(&ini).unwrap(), "[SystemSettings]\r\nFullscreen=True\r\n");
+        assert!(!helper.exists() && !helper_settings.exists());
+        assert!(!marker_path(game).exists());
+        for b in backup::list(game) {
             let _ = backup::delete(&b);
         }
         let _ = fs::remove_dir_all(&base);

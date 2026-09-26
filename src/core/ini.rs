@@ -26,9 +26,27 @@ pub enum Encoding {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Line {
-    Section(String),
-    Entry { key: String, value: String },
+    /// A `[name]` header; `raw` is the whole line as written (spacing,
+    /// a trailing comment), reproduced as is.
+    Section { name: String, raw: String },
+    /// `key` is trimmed for lookups; `raw_key` is everything before the `=`
+    /// as written, so untouched spacing survives a save.
+    Entry { key: String, raw_key: String, value: String },
     Other(String),
+}
+
+impl Line {
+    fn entry(key: &str, value: &str) -> Self {
+        Line::Entry { key: key.to_string(), raw_key: key.to_string(), value: value.to_string() }
+    }
+}
+
+/// The name of a `[Section]` header line, which may carry a trailing comment.
+fn header_name(trimmed: &str) -> Option<&str> {
+    let rest = trimmed.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    let after = rest[end + 1..].trim();
+    (after.is_empty() || is_comment(after)).then(|| &rest[..end])
 }
 
 #[derive(Clone, Debug)]
@@ -70,12 +88,13 @@ impl IniDoc {
         for raw in text.lines() {
             let raw = raw.strip_suffix('\r').unwrap_or(raw);
             let trimmed = raw.trim();
-            if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
-                lines.push(Line::Section(trimmed[1..trimmed.len() - 1].to_string()));
+            if let Some(name) = header_name(trimmed) {
+                lines.push(Line::Section { name: name.to_string(), raw: raw.to_string() });
             } else if !trimmed.is_empty() && !is_comment(trimmed) {
                 if let Some((k, v)) = raw.split_once('=') {
                     lines.push(Line::Entry {
                         key: k.trim().to_string(),
+                        raw_key: k.to_string(),
                         value: v.to_string(),
                     });
                     continue;
@@ -120,13 +139,9 @@ impl IniDoc {
                 out.push_str(self.newline);
             }
             match line {
-                Line::Section(name) => {
-                    out.push('[');
-                    out.push_str(name);
-                    out.push(']');
-                }
-                Line::Entry { key, value } => {
-                    out.push_str(key);
+                Line::Section { raw, .. } => out.push_str(raw),
+                Line::Entry { raw_key, value, .. } => {
+                    out.push_str(raw_key);
                     out.push('=');
                     out.push_str(value);
                 }
@@ -160,7 +175,7 @@ impl IniDoc {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        std::fs::write(path, self.to_bytes()).with_context(|| format!("writing {}", path.display()))
+        crate::core::atomic::write(path, &self.to_bytes()).with_context(|| format!("saving {}", path.display()))
     }
 
     /// Index ranges `(header, end)` of every occurrence of `section`, where
@@ -169,7 +184,7 @@ impl IniDoc {
         let mut ranges = Vec::new();
         let mut current: Option<usize> = None;
         for (i, line) in self.lines.iter().enumerate() {
-            if let Line::Section(name) = line {
+            if let Line::Section { name, .. } = line {
                 if let Some(start) = current.take() {
                     ranges.push((start, i));
                 }
@@ -224,7 +239,9 @@ impl IniDoc {
         let indices = self.entry_indices(section, key);
         if let Some((&last, earlier)) = indices.split_last() {
             if let Line::Entry { value: v, .. } = &mut self.lines[last] {
-                *v = value.to_string();
+                // Keep the spacing after `=` the file already uses.
+                let lead = v.len() - v.trim_start().len();
+                *v = format!("{}{value}", &v[..lead]);
             }
             for &i in earlier.iter().rev() {
                 self.lines.remove(i);
@@ -232,13 +249,7 @@ impl IniDoc {
             return;
         }
         let at = self.insertion_point(section);
-        self.lines.insert(
-            at,
-            Line::Entry {
-                key: key.to_string(),
-                value: value.to_string(),
-            },
-        );
+        self.lines.insert(at, Line::entry(key, value));
     }
 
     /// Replaces every value of an array key with `values`, keeping them where
@@ -253,13 +264,7 @@ impl IniDoc {
             self.lines.remove(i);
         }
         for (n, value) in values.iter().enumerate() {
-            self.lines.insert(
-                at + n,
-                Line::Entry {
-                    key: key.to_string(),
-                    value: value.to_string(),
-                },
-            );
+            self.lines.insert(at + n, Line::entry(key, value));
         }
     }
 
@@ -309,13 +314,7 @@ impl IniDoc {
             .any(|v| v.eq_ignore_ascii_case(value));
         if !exists {
             let at = self.insertion_point(section);
-            self.lines.insert(
-                at,
-                Line::Entry {
-                    key: key.to_string(),
-                    value: value.to_string(),
-                },
-            );
+            self.lines.insert(at, Line::entry(key, value));
         }
     }
 
@@ -339,7 +338,7 @@ impl IniDoc {
         } else if !self.lines.is_empty() {
             self.lines.push(Line::Other(String::new()));
         }
-        self.lines.push(Line::Section(section.to_string()));
+        self.lines.push(Line::Section { name: section.to_string(), raw: format!("[{section}]") });
         self.lines.len()
     }
 }
@@ -381,6 +380,19 @@ mod tests {
         doc.set("SystemSettings", "ResY", "1080");
         let text = doc.to_text();
         assert!(text.starts_with("[SystemSettings]\r\nBloom=False\r\nResX=1920\r\nResY=1080\r\n\r\n[FullScreenMovie]"));
+    }
+
+    #[test]
+    fn edits_keep_untouched_lines_exactly() {
+        let text = "[A]\r\nKey = Value\r\n  Other=1\r\n\t[B] ; note\r\nX=1\r\n";
+        let mut doc = IniDoc::parse(text);
+        assert_eq!(doc.get("B", "X"), Some("1"), "a header with a comment is still a header");
+        doc.set("A", "Key", "New");
+        doc.set("A", "Added", "2");
+        assert_eq!(doc.to_text(), "[A]\r\nKey = New\r\n  Other=1\r\nAdded=2\r\n\t[B] ; note\r\nX=1\r\n");
+        let mut round = IniDoc::parse(text);
+        round.set("B", "X", "1");
+        assert_eq!(round.to_text(), text, "rewriting the same value changes nothing");
     }
 
     #[test]

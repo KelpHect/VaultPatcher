@@ -2,6 +2,7 @@
 //! downloads and install records.
 
 pub mod art;
+pub mod atomic;
 pub mod backup;
 pub mod binpatch;
 pub mod detect;
