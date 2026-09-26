@@ -22,8 +22,16 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
     mostly transparent over Mica, so blending over it would keep the sharp
     original showing. Scratch textures are created on first use, resized with
     the window and dropped on device loss.
-  - Blade (Linux) and Metal (macOS) skip backdrops for now; elements keep their
-    translucent fill.
+  - Blade (Linux, `platform/blade`): swapchain images can't be sampled, so a
+    frame with backdrops is drawn into an offscreen texture and copied to the
+    drawable at the end (frames without them are unchanged). Each backdrop
+    batch blurs horizontally into a scratch texture, then vertically back
+    inside the rounded rect with the same noise. Blade has no dual-source
+    blending, so the replace is two draws per backdrop: scale the frame by
+    `1 - coverage`, then add the blurred color times coverage. Targets are
+    created on first use and dropped on resize.
+  - Metal (macOS) skips backdrops for now; elements keep their translucent
+    fill.
 - **Scale transforms**: `Styled::transform_scale(f32)` /
   `Window::with_element_scale(origin, scale, f)`. Every primitive goes through
   `Window::insert_primitive`, which applies the current `ElementTransform`

@@ -978,6 +978,149 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
     return blend_color(input.color, alpha);
 }
 
+// --- backdrop blur (Fluent acrylic) --- //
+//
+// Two separable gaussian passes over what's been drawn so far (the frame is
+// rendered into an offscreen target when it has backdrops, so it can be
+// sampled). The horizontal pass writes a scratch texture; the vertical pass
+// draws back into the frame, clipped to the element's rounded rect, with a
+// touch of noise like Windows' acrylic. The element's translucent fill is
+// painted over it as the tint.
+
+// `Bounds` holds `vec2`s, which are 8-byte aligned in storage buffers and
+// would pad this struct to 64 bytes; the host `Backdrop` is 60 bytes of
+// 4-byte fields, so the bounds are spelled out as scalars here.
+struct PackedBounds {
+    origin_x: f32,
+    origin_y: f32,
+    width: f32,
+    height: f32,
+}
+
+struct Backdrop {
+    order: u32,
+    blur_radius: f32,
+    bounds: PackedBounds,
+    corner_radii: Corners,
+    content_mask: PackedBounds,
+    opacity: f32,
+}
+var<storage, read> b_backdrops: array<Backdrop>;
+
+fn unpack_bounds(b: PackedBounds) -> Bounds {
+    return Bounds(vec2<f32>(b.origin_x, b.origin_y), vec2<f32>(b.width, b.height));
+}
+
+struct BackdropVarying {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) backdrop_id: u32,
+    @location(1) clip_distances: vec4<f32>,
+}
+
+// Gaussian along `direction`, spanning 3 sigma each side. Taps are spread
+// out for wide blurs; bilinear filtering covers the gaps between them.
+fn backdrop_blur_1d(position: vec2<f32>, direction: vec2<f32>, blur_radius: f32) -> vec4<f32> {
+    let TAPS = 24;
+    let sigma = max(blur_radius, 0.5);
+    let spacing = max(3.0 * sigma / f32(TAPS), 1.0);
+    var sum = vec4<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var i = -TAPS; i <= TAPS; i += 1) {
+        let offset = f32(i) * spacing;
+        let weight = exp(-0.5 * offset * offset / (sigma * sigma));
+        let uv = (position + direction * offset) / globals.viewport_size;
+        sum += textureSampleLevel(t_sprite, s_sprite, uv, 0.0) * weight;
+        weight_sum += weight;
+    }
+    return sum / weight_sum;
+}
+
+@vertex
+fn vs_backdrop_blur_x(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> BackdropVarying {
+    let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    let backdrop = b_backdrops[instance_id];
+
+    // Cover the rows the vertical pass will sample, too.
+    var bounds = unpack_bounds(backdrop.bounds);
+    let margin = 3.0 * backdrop.blur_radius;
+    bounds.origin.y -= margin;
+    bounds.size.y += 2.0 * margin;
+
+    var out = BackdropVarying();
+    out.position = to_device_position(unit_vertex, bounds);
+    out.backdrop_id = instance_id;
+    out.clip_distances = vec4<f32>(1.0);
+    return out;
+}
+
+@fragment
+fn fs_backdrop_blur_x(input: BackdropVarying) -> @location(0) vec4<f32> {
+    let backdrop = b_backdrops[input.backdrop_id];
+    return backdrop_blur_1d(input.position.xy, vec2<f32>(1.0, 0.0), backdrop.blur_radius);
+}
+
+@vertex
+fn vs_backdrop(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> BackdropVarying {
+    let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    let backdrop = b_backdrops[instance_id];
+    let bounds = unpack_bounds(backdrop.bounds);
+
+    var out = BackdropVarying();
+    out.position = to_device_position(unit_vertex, bounds);
+    out.backdrop_id = instance_id;
+    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, unpack_bounds(backdrop.content_mask));
+    return out;
+}
+
+fn backdrop_coverage(input: BackdropVarying) -> f32 {
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return 0.0;
+    }
+    let backdrop = b_backdrops[input.backdrop_id];
+    let distance = quad_sdf(input.position.xy, unpack_bounds(backdrop.bounds), backdrop.corner_radii);
+    return saturate(0.5 - distance) * backdrop.opacity;
+}
+
+// Blade has no dual-source blending, so the DirectX renderer's
+// `dst = src + dst * (1 - coverage)` is split in two draws per backdrop.
+// This one scales the frame by `1 - coverage` (blend: Zero, OneMinusSrcAlpha).
+@fragment
+fn fs_backdrop_mask(input: BackdropVarying) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, backdrop_coverage(input));
+}
+
+// ...and this one adds the blurred color, premultiplied by coverage
+// (blend: One, One). Together they replace the frame by coverage: it's
+// mostly transparent over the desktop, so blending "over" it would leave the
+// sharp original showing through.
+@fragment
+fn fs_backdrop_blur_y(input: BackdropVarying) -> @location(0) vec4<f32> {
+    let coverage = backdrop_coverage(input);
+    if (coverage <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let backdrop = b_backdrops[input.backdrop_id];
+    var blurred = backdrop_blur_1d(input.position.xy, vec2<f32>(0.0, 1.0), backdrop.blur_radius);
+
+    // Acrylic's noise layer: about 2% grain keeps large blurs from banding.
+    let noise = fract(sin(dot(floor(input.position.xy), vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
+    blurred = vec4<f32>(saturate(blurred.rgb + noise * 0.02 * blurred.a), blurred.a);
+
+    return blurred * coverage;
+}
+
+// Copies the offscreen frame to the drawable once it's done.
+@vertex
+fn vs_backdrop_composite(@builtin(vertex_index) vertex_id: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((vertex_id << 1u) & 2u), f32(vertex_id & 2u));
+    return vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
+}
+
+@fragment
+fn fs_backdrop_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(t_sprite, vec2<i32>(position.xy), 0);
+}
+
 // --- path rasterization --- //
 
 struct PathRasterizationVertex {
