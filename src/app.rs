@@ -11,6 +11,7 @@ use gpui::{
     MouseButton, NavigationDirection, ObjectFit, ParentElement, Render, SharedString, Styled, Subscription, Window,
     WindowControlArea, div, img, prelude::*, px,
 };
+use gpui_component::Disableable as _;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -38,6 +39,12 @@ pub struct Shell {
     /// The user's pane choice from the menu button; None follows the window
     /// width (compact below 1008px, like NavigationView).
     pane_open: Option<bool>,
+    /// The window is narrower than NavigationView's 1008px breakpoint: the
+    /// pane is a compact rail and opens as an overlay.
+    narrow: bool,
+    /// One focus handle per nav item, so arrow keys can move focus along
+    /// the pane (it's a single Tab stop).
+    nav_focus: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PageKind, gpui::FocusHandle>>>,
     _subs: Vec<Subscription>,
 }
 
@@ -82,7 +89,7 @@ impl Shell {
             ws.search_input = Some(search);
             ws.profile_input = Some(profile);
         });
-        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, _subs: subs }
+        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, narrow: false, nav_focus: Default::default(), _subs: subs }
     }
 
     /// Tracks page changes for the back button. Switching game or mode starts
@@ -103,6 +110,9 @@ impl Shell {
                 }
             }
         }
+        if self.shown.is_some_and(|prev| prev != now) && self.narrow && self.pane_open == Some(true) {
+            self.pane_open = None;
+        }
         self.going_back = false;
         self.shown = Some(now);
     }
@@ -119,6 +129,11 @@ impl Shell {
     fn on_key(&mut self, ev: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.as_str();
         let ctrl = ev.keystroke.modifiers.control;
+        if key == "escape" && self.narrow && self.pane_open == Some(true) {
+            self.pane_open = None;
+            cx.notify();
+            return;
+        }
         if ev.keystroke.modifiers.alt && key == "left" {
             self.go_back(cx);
             return;
@@ -222,7 +237,7 @@ impl Shell {
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    .gap(px(16.))
                     .px(px(12.))
                     .child(app_mark(16.))
                     .child(
@@ -348,7 +363,7 @@ impl Shell {
             return ui::icon_button("mode-flip", if mode == Mode::Simple { Icon::Wand } else { Icon::Sliders }, theme::text())
                 .w(px(40.))
                 .h(px(36.))
-                .tooltip(ui::tip(format!("{} — click for {}", tip(mode), if other == Mode::Simple { "Simple" } else { "Advanced" })))
+                .tooltip(ui::tip(if other == Mode::Simple { "Switch to Simple" } else { "Switch to Advanced" }))
                 .on_click(move |_, window, cx| switch_mode(&ws, other, window, cx))
                 .into_any_element();
         }
@@ -364,21 +379,31 @@ impl Shell {
         wrap.into_any_element()
     }
 
-    fn pane(&self, compact: bool, cx: &Context<Self>) -> AnyElement {
+    /// The navigation pane: `compact` is the 48px icon rail; `scroll_id`
+    /// keeps each pane variant's scroll position apart.
+    fn pane(&self, compact: bool, scroll_id: &'static str, cx: &Context<Self>) -> AnyElement {
         let state = self.ws.read(cx);
         let game = state.game();
         let mut nav = div().flex().flex_col().pb(px(8.));
+        // App settings is pinned to the pane's footer, like Windows apps do.
+        let mut settings_item = None;
         for (i, group) in game.def.nav_for(state.mode()).iter().enumerate() {
+            let items: Vec<&'static NavItem> = group.items.iter().filter(|n| n.kind != PageKind::Settings).collect();
+            settings_item = settings_item.or(group.items.iter().find(|n| n.kind == PageKind::Settings));
+            if items.is_empty() {
+                continue;
+            }
             nav = if compact {
                 // Compact panes separate groups with a line instead of headers.
                 nav.when(i > 0, |d| d.child(ui::divider().mx(px(12.)).my(px(8.))))
             } else {
                 nav.child(ui::label(group.title).px(px(16.)).pt(px(16.)).pb(px(4.)))
             };
-            for item in group.items {
+            for item in items {
                 nav = nav.child(self.nav_entry(item, compact, cx));
             }
         }
+        let footer_settings = settings_item.map(|item| self.nav_entry(item, compact, cx));
 
         let play_ws = self.ws.clone();
         let can_play = game.install.is_some();
@@ -435,26 +460,15 @@ impl Shell {
         } else {
             "Game install not found"
         };
+        let playable = can_play && !running;
         if compact {
-            let play = div()
-                .id("rail-play")
-                .flex()
-                .items_center()
-                .justify_center()
+            let play = ui::button_if(playable, "rail-play", "", Some(Icon::Play), Variant::Primary)
                 .w(px(40.))
                 .h(px(36.))
-                .rounded(px(theme::RADIUS))
-                .bg(theme::accent())
-                .hover(|s| s.bg(theme::accent_hi()))
-                .active(|s| s.bg(theme::accent_pressed()))
-                .child(ui::icon(Icon::Play).text_color(theme::accent_ink()))
-                .when(!can_play || running, |b| b.opacity(0.5))
+                .px(px(0.))
+                .gap(px(0.))
                 .tooltip(ui::tip(if running { "Running" } else { tip }))
-                .on_click(move |_, _, cx| {
-                    if can_play && !running {
-                        play_ws.update(cx, |ws, cx| ws.launch_default(cx))
-                    }
-                });
+                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx)));
             return div()
                 .w(px(48.))
                 .flex_none()
@@ -462,9 +476,22 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(div().flex().flex_col().items_center().gap(px(4.)).pb(px(4.)).child(self.game_switcher(true, cx)).child(self.mode_toggle(true, cx)))
-                .child(div().id("nav-scroll").w_full().flex_1().min_h_0().overflow_y_scroll().child(nav))
-                .child(div().pt(px(8.)).pb(px(12.)).child(play))
+                .child(div().pb(px(4.)).child(self.game_switcher(true, cx)))
+                .child(div().id(scroll_id).w_full().flex_1().min_h_0().overflow_y_scroll().child(nav))
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(4.))
+                        .pt(px(4.))
+                        .pb(px(12.))
+                        .child(ui::divider().w(px(32.)).mb(px(4.)))
+                        .children(footer_settings)
+                        .child(self.mode_toggle(true, cx))
+                        .child(play),
+                )
                 .into_any_element();
         }
         // SplitButton: the halves meet with square inner corners.
@@ -472,7 +499,8 @@ impl Shell {
             .flex()
             .w_full()
             .child(
-                ui::button(
+                ui::button_if(
+                    playable,
                     "rail-play",
                     if running { "Running".to_string() } else { format!("Play {short}") },
                     Some(Icon::Play),
@@ -483,25 +511,21 @@ impl Shell {
                 .h(px(36.))
                 .rounded_tr(px(0.))
                 .rounded_br(px(0.))
-                .when(!can_play || running, |b| b.opacity(0.5))
-                .tooltip(ui::tip(tip))
-                .on_click(move |_, _, cx| {
-                    if can_play && !running {
-                        play_ws.update(cx, |ws, cx| ws.launch_default(cx))
-                    }
-                }),
+                .tooltip(ui::tip(if running { "Running" } else { tip }))
+                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx))),
             )
             .child(div().w(px(1.)).h(px(36.)).bg(theme::with_alpha(theme::accent_ink(), 0.2)))
             .child(
                 Button::new("rail-play-menu")
                     .primary()
+                    .disabled(!playable)
                     .h(px(36.))
                     .w(px(36.))
                     .flex_none()
                     .rounded_tl(px(0.))
                     .rounded_bl(px(0.))
                     .tooltip("More ways to start the game")
-                    .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(theme::accent_ink()))
+                    .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }))
                     .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _, _| {
                         menu = menu.item(launch_item(format!("Play {short}"), "With your launch options", Icon::Play, LaunchMode::Normal));
                         if launcher_known {
@@ -539,7 +563,8 @@ impl Shell {
             .flex()
             .flex_col()
             .child(div().flex().flex_col().gap(px(8.)).px(px(8.)).pb(px(4.)).child(self.game_switcher(false, cx)).child(div().px(px(4.)).child(self.mode_toggle(false, cx))))
-            .child(div().id("nav-scroll").flex_1().min_h_0().overflow_y_scroll().child(nav))
+            .child(div().id(scroll_id).flex_1().min_h_0().overflow_y_scroll().child(nav))
+            .child(div().pt(px(4.)).child(ui::divider().mx(px(12.)).mb(px(4.))).children(footer_settings))
             .child(div().px(px(12.)).pt(px(8.)).pb(px(12.)).child(play))
             .into_any_element()
     }
@@ -570,7 +595,32 @@ impl Shell {
         } else {
             pill.top(px(10.)).h(px(16.)).into_any_element()
         };
-        ui::focusable(div().id(ElementId::Name(id)))
+        // The pane is one Tab stop (the selected item); arrow keys move along it.
+        let focus = self.nav_focus.borrow_mut().entry(kind).or_insert_with(|| cx.focus_handle()).clone();
+        let order: Vec<PageKind> = game.def.nav_items(state.mode()).map(|n| n.kind).collect();
+        let key_ws = self.ws.clone();
+        let key_focus = self.nav_focus.clone();
+        div()
+            .id(ElementId::Name(id))
+            .track_focus(&focus.tab_index(0).tab_stop(active))
+            .focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(1.), Some(theme::focus_stroke_inner().into())))
+            .on_key_down(move |ev, window, cx| {
+                let at = order.iter().position(|k| *k == kind).unwrap_or(0);
+                let next = match ev.keystroke.key.as_str() {
+                    "up" => at.checked_sub(1),
+                    "down" => (at + 1 < order.len()).then_some(at + 1),
+                    "home" => Some(0),
+                    "end" => order.len().checked_sub(1),
+                    _ => return,
+                };
+                cx.stop_propagation();
+                if let Some(next) = next.map(|i| order[i]).filter(|k| *k != kind) {
+                    key_ws.update(cx, |ws, cx| ws.navigate(next, cx));
+                    if let Some(handle) = key_focus.borrow().get(&next) {
+                        window.focus(handle);
+                    }
+                }
+            })
             .relative()
             .mx(px(4.))
             .my(px(2.))
@@ -710,18 +760,7 @@ impl Shell {
         let item = |text: String| div().flex_none().text_size(px(12.)).line_height(px(16.)).text_color(theme::text_muted()).child(text);
         let sep = || div().w(px(1.)).h(px(12.)).bg(theme::line());
         let toggle = |id: &'static str, glyph: Icon, on: bool, tip: &'static str| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(24.))
-                .rounded(px(theme::RADIUS))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::panel_hi()))
-                .active(|s| s.bg(theme::panel_pressed()))
-                .tooltip(ui::tip(tip))
-                .child(ui::icon(glyph).size(px(12.)).text_color(if on { theme::text() } else { theme::text_dim() }))
+            ui::icon_button_if(sounds, id, glyph, if on { theme::text() } else { theme::text_muted() }).size(px(28.)).tooltip(ui::tip(tip))
         };
 
         div()
@@ -743,7 +782,6 @@ impl Shell {
             .child(sep())
             .child(
                 toggle("sb-music", Icon::Music, music && !muted && sounds, "Menu music")
-                    .when(!sounds, |d| d.opacity(0.4))
                     .on_click(move |_, _, cx| music_ws.update(cx, |ws, cx| ws.set_music(!music, cx))),
             )
             .child(
@@ -753,7 +791,6 @@ impl Shell {
                     !muted && sounds,
                     if sounds { "Button sounds (from the game's launcher)" } else { "No game sounds found" },
                 )
-                .when(!sounds, |d| d.opacity(0.4))
                 .on_click(move |_, _, cx| mute_ws.update(cx, |ws, cx| ws.set_muted(!muted, cx))),
             )
             .child(sep())
@@ -1056,7 +1093,16 @@ impl Render for Shell {
         let pending_bar = self.pending_bar(cx).filter(|_| !running);
         let toast_bottom = 44. + if pending_bar.is_some() { 64. } else { 0. };
         let drop_ws = self.ws.clone();
-        let compact = !self.pane_open.unwrap_or(window.viewport_size().width >= px(1008.));
+        self.narrow = window.viewport_size().width < px(1008.);
+        // Wide: the pane is inline, collapsible to the rail. Narrow: the rail
+        // stays and the full pane opens over the content.
+        let compact = self.narrow || self.pane_open == Some(false);
+        let overlay_pane = self.narrow && self.pane_open == Some(true) && !running;
+        let overlays: Vec<AnyElement> = crate::pages::compare::lightbox(&self.ws, window, cx)
+            .into_iter()
+            .chain(self.review(cx))
+            .chain(self.welcome(cx))
+            .collect();
         div()
             .size_full()
             .relative()
@@ -1090,7 +1136,7 @@ impl Render for Shell {
                     .track_focus(&self.focus)
                     .on_key_down(cx.listener(Self::on_key))
                     .on_mouse_down(MouseButton::Navigate(NavigationDirection::Back), cx.listener(|this, _, _, cx| this.go_back(cx)))
-                    .when(!running, |d| d.child(self.pane(compact, cx)))
+                    .when(!running, |d| d.child(self.pane(compact, if compact { "nav-scroll-rail" } else { "nav-scroll" }, cx)))
                     .child(
                         // The content layer, rounded where it meets the pane,
                         // like NavigationView's content area over Mica.
@@ -1110,9 +1156,41 @@ impl Render for Shell {
                     ),
             )
             .child(self.status_bar(cx))
-            .children(crate::pages::compare::lightbox(&self.ws, window, cx))
-            .children(self.review(cx))
-            .children(self.welcome(cx))
+            .when(overlay_pane, |d| {
+                // NavigationView's overlay pane: acrylic, over the content;
+                // a click outside closes it.
+                d.child(
+                    div()
+                        .id("pane-overlay")
+                        .absolute()
+                        .top(px(TITLE_BAR))
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pane_open = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .id("pane-overlay-body")
+                                .h_full()
+                                .w(px(PANE))
+                                .backdrop_blur(px(theme::ACRYLIC_BLUR))
+                                .bg(theme::acrylic())
+                                .border_r_1()
+                                .border_color(theme::flyout_stroke())
+                                .shadow(theme::shadow())
+                                .on_click(|_, _, cx| cx.stop_propagation())
+                                .child(self.pane(false, "nav-scroll-overlay", cx)),
+                        ),
+                )
+            })
+            // Overlays start below the title bar, so the caption buttons work.
+            .when(!overlays.is_empty(), |d| {
+                d.child(div().absolute().top(px(TITLE_BAR)).left_0().right_0().bottom_0().children(overlays))
+            })
             .child(self.toasts(toast_bottom, cx))
             .children(gpui_component::Root::render_dialog_layer(window, cx))
     }
