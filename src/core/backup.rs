@@ -1,4 +1,4 @@
-//! Snapshot backups of every file Vault Patcher is about to touch.
+//! Snapshot backups of every file Vaulter is about to touch.
 //!
 //! Layout: `<data dir>/backups/<game id>/<timestamp>/<file name>` plus a
 //! `manifest.json` recording where each file came from, so a restore puts
@@ -27,41 +27,62 @@ pub struct Backup {
     pub dir: PathBuf,
 }
 
-/// Where Vault Patcher keeps its settings, records and backups: a
-/// `VaultPatcher Data` folder next to the exe, so the app is portable. Tests
-/// use a throwaway folder so they never touch the real one, and
-/// `VAULT_PATCHER_DATA_DIR` points it anywhere else.
+/// Where Vaulter keeps its settings, records and backups: a
+/// `Vaulter Data` folder next to the exe, so the app is portable. Tests use a
+/// throwaway folder so they never touch the real one, and `VAULTER_DATA_DIR`
+/// points it anywhere else.
 pub fn data_dir() -> PathBuf {
     if cfg!(test) {
-        return std::env::temp_dir().join("vaultpatcher-test-data");
+        return std::env::temp_dir().join("vaulter-test-data");
     }
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(resolve_data_dir).clone()
 }
 
 /// The folder name next to the exe.
-const PORTABLE_DIR: &str = "VaultPatcher Data";
+const PORTABLE_DIR: &str = "Vaulter Data";
+/// What Vault Patcher (the old name) used: next to the exe (2.2), then in
+/// %APPDATA% (before 2.2). Either moves to the new place on first run.
+const OLD_PORTABLE_DIR: &str = "VaultPatcher Data";
+const OLD_APPDATA_DIR: &str = "VaultPatcher";
 
-/// Picks the data folder once per run. Next to the exe when that folder is
-/// writable, else `%APPDATA%\VaultPatcher` (an exe in Program Files). Data an
-/// older version kept in `%APPDATA%` moves next to the exe on first run.
+/// Picks the data folder once per run: next to the exe when that folder is
+/// writable, else `%APPDATA%\Vaulter` (an exe in Program Files). Data from
+/// Vault Patcher (next to the exe, or in `%APPDATA%\VaultPatcher`) moves to
+/// the new place on first run.
 fn resolve_data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("VAULT_PATCHER_DATA_DIR") {
+    if let Some(dir) = std::env::var_os("VAULTER_DATA_DIR").or_else(|| std::env::var_os("VAULT_PATCHER_DATA_DIR")) {
         return PathBuf::from(dir);
     }
-    let legacy = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("VaultPatcher");
-    let Some(portable) = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join(PORTABLE_DIR))) else {
-        return legacy;
+    let appdata = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
+    let exe_dir = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.to_path_buf()));
+    let old: Vec<PathBuf> = exe_dir.iter().map(|d| d.join(OLD_PORTABLE_DIR)).chain([appdata.join(OLD_APPDATA_DIR)]).filter(|d| d.is_dir()).collect();
+    let fallback = appdata.join("Vaulter");
+    let Some(portable) = exe_dir.map(|d| d.join(PORTABLE_DIR)) else {
+        return adopt(&old, fallback);
     };
     if portable.is_dir() {
         return portable;
     }
-    if !legacy.is_dir() {
-        return if writable_dir(&portable) { portable } else { legacy };
+    if !writable_dir(&portable) {
+        return if fallback.is_dir() { fallback } else { adopt(&old, fallback) };
     }
-    match move_dir(&legacy, &portable) {
-        Ok(()) => portable,
-        Err(_) => legacy,
+    let _ = std::fs::remove_dir(&portable);
+    adopt(&old, portable)
+}
+
+/// Moves the first old data folder to `to` (keeping the old one in use if
+/// that fails), or just returns `to` when there's nothing to move.
+fn adopt(old: &[PathBuf], to: PathBuf) -> PathBuf {
+    match old.first() {
+        None => {
+            let _ = std::fs::create_dir_all(&to);
+            to
+        }
+        Some(from) => match move_dir(from, &to) {
+            Ok(()) => to,
+            Err(_) => from.clone(),
+        },
     }
 }
 
@@ -185,9 +206,17 @@ pub fn missing_from(backup: &Backup, files: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Label of the permanent snapshot taken before Vault Patcher first changes
+/// Label of the permanent snapshot taken before Vaulter first changes
 /// a game's settings. Never pruned.
-pub const ORIGINAL_LABEL: &str = "Original settings (before Vault Patcher)";
+pub const ORIGINAL_LABEL: &str = "Original settings (before Vaulter)";
+
+/// The label the original-settings backup had before the rename.
+const OLD_ORIGINAL_LABEL: &str = "Original settings (before Vault Patcher)";
+
+/// Whether `backup` holds the user's original settings (kept forever).
+pub fn is_original(backup: &Backup) -> bool {
+    backup.label == ORIGINAL_LABEL || backup.label == OLD_ORIGINAL_LABEL
+}
 
 pub fn load(dir: &Path) -> Option<Backup> {
     let text = std::fs::read_to_string(dir.join("manifest.json")).ok()?;
@@ -276,6 +305,8 @@ mod tests {
         std::fs::write(from.join("backups").join("bl2").join("a.ini"), b"x").unwrap();
 
         let to = root.join("new").join(PORTABLE_DIR);
+        assert!(is_original(&Backup { label: OLD_ORIGINAL_LABEL.into(), created_at: String::new(), files: vec![], dir: PathBuf::new() }));
+        assert!(is_original(&Backup { label: ORIGINAL_LABEL.into(), created_at: String::new(), files: vec![], dir: PathBuf::new() }));
         move_dir(&from, &to).unwrap();
         assert!(!from.exists());
         assert_eq!(std::fs::read(to.join("settings.json")).unwrap(), b"{}");

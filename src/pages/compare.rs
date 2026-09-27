@@ -421,7 +421,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
     page = page.child(
         ui::panel().p(px(16.)).flex().flex_col().gap(px(8.))
             .child(ui::section_title("How it works", None))
-            .child(ui::body(format!("For each of the {total_shots} shots, Vault Patcher writes that setting and launches the game straight into your chosen save (via the Quick Startup mod). A small helper mod hides the HUD and weapon, the window is captured, and the game quits. Your settings and game folder are restored afterwards.")))
+            .child(ui::body(format!("For each of the {total_shots} shots, Vaulter writes that setting and launches the game straight into your chosen save (via the Quick Startup mod). A small helper mod hides the HUD and weapon, the window is captured, and the game quits. Your settings and game folder are restored afterwards.")))
             .child(ui::body(format!("Takes about {minutes} minutes and the game takes over the screen. Save somewhere scenic first; every shot is taken where the save loads."))),
     );
 

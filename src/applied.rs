@@ -1,4 +1,4 @@
-//! The values Vault Patcher last wrote, remembered per game.
+//! The values Vaulter last wrote, remembered per game.
 //!
 //! The game, its launcher, an in-game menu or a file check can rewrite the
 //! ini files (or revert the exe) behind our back. This record is what
@@ -21,7 +21,7 @@ use crate::core::binpatch::PatchState;
 use crate::games::GameDef;
 use crate::tweaks::{ConfigSet, Tweak, Value};
 
-/// What Vault Patcher currently has down on disk, or believes it has.
+/// What Vaulter currently has down on disk, or believes it has.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Applied {
@@ -97,7 +97,7 @@ impl Applied {
 
     /// Takes what's on disk now as the intent, for the tweaks already
     /// remembered (after a backup restore, or "keep current values").
-    /// Nothing new gets pinned: tweaks Vault Patcher never wrote stay free.
+    /// Nothing new gets pinned: tweaks Vaulter never wrote stay free.
     pub fn sync_values(&mut self, def: &GameDef, config: &ConfigSet) {
         self.values.retain(|id, raw| {
             let now = def.tweak(id).and_then(|t| t.read(config)).and_then(|v| crate::profiles::encode(&v));
@@ -158,7 +158,7 @@ fn update_at(path: &Path, config_dir: Option<&Path>, install: Option<&Path>, f: 
     let mut applied = before.clone().fit(config_dir, install);
     f(&mut applied);
     if applied != before {
-        save_to(path, &applied).context("remembering what Vault Patcher wrote, for Re-apply")?;
+        save_to(path, &applied).context("remembering what Vaulter wrote, for Re-apply")?;
     }
     Ok(applied)
 }
@@ -199,7 +199,7 @@ mod tests {
     }
 
     fn sandbox(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("vaultpatcher-applied-{name}"));
+        let dir = std::env::temp_dir().join(format!("vaulter-applied-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("bl2.json")
     }

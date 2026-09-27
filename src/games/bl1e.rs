@@ -408,7 +408,7 @@ const MODERN_DEFAULTS: &[(&str, crate::tweaks::DefaultValue)] = &[
     ("subtitles", B(true)),
 ];
 
-const DXVK_CONF: &str = "# Vault Patcher DXVK profile for Borderlands GOTY Enhanced\n\
+const DXVK_CONF: &str = "# Vaulter DXVK profile for Borderlands GOTY Enhanced\n\
 dxgi.maxFrameLatency = 1\n\
 dxgi.syncInterval = -1\n\
 d3d11.samplerAnisotropy = 16\n";
@@ -760,7 +760,7 @@ mod tests {
     #[ignore = "reads a local BL1E config"]
     fn live_every_tweak_writes_and_reads_back() {
         let Some(dir) = config_dir() else { return };
-        let sandbox = std::env::temp_dir().join("vaultpatcher-bl1e-sandbox");
+        let sandbox = std::env::temp_dir().join("vaulter-bl1e-sandbox");
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(&sandbox).unwrap();
         for (_, name) in GAME.ini_files {

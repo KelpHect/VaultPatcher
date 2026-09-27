@@ -66,7 +66,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .tooltip(ui::tip(if running {
                 "Wait for setup to finish"
             } else {
-                "The game or its launcher rewrote your settings? Puts back every Vault Patcher setting and upgrade."
+                "The game or its launcher rewrote your settings? Puts back every Vaulter setting and upgrade."
             }))
             .on_click(move |_, _, cx| reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx)))
             .into_any_element(),
@@ -158,14 +158,14 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .child(ui::body("Changed your mind? Everything here can be undone in one go.").flex_1())
             .child(
                 ui::button_if(!running, "setup-restore", "Restore vanilla…", Some(Icon::Undo), Variant::Ghost)
-                    .tooltip(ui::tip(if running { "Wait for setup to finish" } else { "Remove everything Vault Patcher installed" }))
+                    .tooltip(ui::tip(if running { "Wait for setup to finish" } else { "Remove everything Vaulter installed" }))
                     .on_click(move |_, window, cx| {
                         let ws = restore_ws.clone();
                         confirm(
                             window,
                             cx,
                             "Restore the vanilla game?",
-                            "Removes every upgrade Vault Patcher installed and puts the affected settings back to the game's defaults. Your saves and your own mods aren't touched.",
+                            "Removes every upgrade Vaulter installed and puts the affected settings back to the game's defaults. Your saves and your own mods aren't touched.",
                             "Restore",
                             move |cx| ws.update(cx, |ws, cx| ws.run_setup(SetupGoal::Uninstall, cx)),
                         );

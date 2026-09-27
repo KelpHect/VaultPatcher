@@ -36,7 +36,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .into_any_element(),
         ui::button("ov-reapply", "Re-apply all", Some(Icon::Refresh), Variant::Secondary)
             .tooltip(ui::tip(
-                "The game or its launcher rewrote your settings? Puts back every Vault Patcher setting and upgrade.",
+                "The game or its launcher rewrote your settings? Puts back every Vaulter setting and upgrade.",
             ))
             .on_click(move |_, _, cx| reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx)))
             .into_any_element(),

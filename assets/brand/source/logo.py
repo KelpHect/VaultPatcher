@@ -1,4 +1,4 @@
-"""Vault Patcher logo: a cel-shaded vault door with a loot gem, rendered in
+"""Vaulter logo: a cel-shaded vault door with a loot gem, rendered in
 the Borderlands style (flat toon bands, heavy ink outlines).
 
 blender -b --python logo.py -- <out.png> <size> <line_px> <bolts 0/1>

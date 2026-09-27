@@ -1,9 +1,9 @@
 //! Maintainer command line. Not needed by players; used to produce the
 //! comparison image set that the app downloads.
 //!
-//! `VaultPatcher.exe --capture <game> [--save Save0001.sav] [--settle 25] [--only a,b] [--limit N]`
-//! `VaultPatcher.exe --package-comparisons <game> [--out comparisons-<game>.zip]`
-//! `VaultPatcher.exe --install-sdk <game>`
+//! `Vaulter.exe --capture <game> [--save Save0001.sav] [--settle 25] [--only a,b] [--limit N]`
+//! `Vaulter.exe --package-comparisons <game> [--out comparisons-<game>.zip]`
+//! `Vaulter.exe --install-sdk <game>`
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

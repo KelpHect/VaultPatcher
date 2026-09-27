@@ -17,7 +17,7 @@ use crate::games::ModSupport;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SdkStatus {
     NotInstalled,
-    /// Installed by Vault Patcher; carries the release tag.
+    /// Installed by Vaulter; carries the release tag.
     Installed(String),
     /// Marker files exist but we didn't install it (manual install / other tool).
     Detected,
@@ -352,7 +352,7 @@ pub fn install_sdk_latest(game_id: &str, support: &ModSupport, root: &Path) -> R
 pub fn uninstall_sdk(game_id: &str, support: &ModSupport, root: &Path) -> Result<()> {
     if manifest::read(game_id, SDK).is_none() {
         bail!(
-            "{} wasn't installed by Vault Patcher, so its file list is unknown. Remove it by hand (see its readme).",
+            "{} wasn't installed by Vaulter, so its file list is unknown. Remove it by hand (see its readme).",
             support.sdk_name
         );
     }
@@ -506,7 +506,7 @@ mod tests {
     #[ignore]
     fn live_sdk_installs_into_sandbox_and_uninstalls() {
         let support = &crate::games::bl2::WILLOW2_SDK;
-        let root = std::env::temp_dir().join("vaultpatcher-sdk-sandbox");
+        let root = std::env::temp_dir().join("vaulter-sdk-sandbox");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("Binaries/Win32")).unwrap();
         let tag = install_sdk_latest("sandbox", support, &root).unwrap();
@@ -548,7 +548,7 @@ mod tests {
     fn sdk_installs_are_recorded_up_front_and_upgrades_drop_stale_files() {
         let support = &crate::games::bl2::WILLOW2_SDK;
         let game = "test-sdk";
-        let base = std::env::temp_dir().join("vaultpatcher-sdk-offline");
+        let base = std::env::temp_dir().join("vaulter-sdk-offline");
         let _ = fs::remove_dir_all(&base);
         let root = base.join("Game");
         fs::create_dir_all(root.join("Binaries/Win32")).unwrap();

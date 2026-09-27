@@ -1,7 +1,7 @@
 //! Text mod (BLCMM / FilterTool) parsing and merging.
 //!
 //! Text Mod Loader locks every other hotfix-using mod once the first one has
-//! run, so Vault Patcher's community patch is built by merging several
+//! run, so Vaulter's community patch is built by merging several
 //! upstream mods into a single offline BLCMM file on the user's machine.
 //! The output format follows OpenBLCMM's `PatchIO` (offline mode):
 //! the XML-ish tree for editors, then `#Commands:` (plain `set` lines) and
@@ -321,7 +321,7 @@ pub fn merge(info: &MergeInfo, gearbox: &[Node], sources: &[Source]) -> String {
         format!("@author {}", info.author),
         format!("@version {}", info.version),
         format!("@description {}", info.description),
-        "Built on this PC by Vault Patcher from the original mods listed below; all credit to their authors.".into(),
+        "Built on this PC by Vaulter from the original mods listed below; all credit to their authors.".into(),
     ] {
         let _ = write!(out, "\t\t\t<comment>{tag}</comment>{NL}");
     }

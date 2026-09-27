@@ -265,7 +265,7 @@ impl Shell {
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(if active { theme::text() } else { theme::text_muted() })
-                            .child("Vault Patcher"),
+                            .child("Vaulter"),
                     ),
             )
             .child(drag("drag").flex_1())
@@ -287,7 +287,7 @@ impl Shell {
                         .hover(|s| s.bg(theme::accent_hi()))
                         .child(ui::icon(Icon::Download).size(px(14.)).text_color(theme::accent_ink()))
                         .child(format!("Update to {tag}"))
-                        .tooltip(ui::tip("A newer Vault Patcher is available. Opens the download page."))
+                        .tooltip(ui::tip("A newer Vaulter is available. Opens the download page."))
                         .on_click(move |_, _, cx| cx.open_url(&page)),
                 )
             })
@@ -1152,7 +1152,7 @@ impl Shell {
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.))
-                                .child(ui::display("Welcome to Vault Patcher", 28.))
+                                .child(ui::display("Welcome to Vaulter", 28.))
                                 .child(ui::body("Fixes, settings and mods for the Borderlands games. Every change is backed up and can be undone.")),
                         ),
                 )

@@ -20,7 +20,7 @@ const ABOUT: &str = "app-settings-about";
 
 /// A clickable SettingsCard: the whole row is the button, with an action
 /// glyph on the right (open-in-new for link-outs, a chevron for pages).
-/// Vault Patcher's own frame rate (not the game's), with a warning when
+/// Vaulter's own frame rate (not the game's), with a warning when
 /// "Match display" would mean more than 60 frames a second.
 fn frame_rate_row(ws: &Entity<Workspace>, current: AppFrameRate, cx: &App) -> AnyElement {
     use crate::tweaks::{Opt, opt};
@@ -54,14 +54,14 @@ fn frame_rate_row(ws: &Entity<Workspace>, current: AppFrameRate, cx: &App) -> An
         .flex_col()
         .child(setting_row(
             "App frame rate",
-            "How smoothly Vault Patcher's own animations run. This is the app's frame rate, not the game's: it never affects how Borderlands runs. Balanced picks an even fraction of your display's refresh rate near 45 fps. Nothing is redrawn while nothing changes, and dragging or typing always follows your display.",
+            "How smoothly Vaulter's own animations run. This is the app's frame rate, not the game's: it never affects how Borderlands runs. Balanced picks an even fraction of your display's refresh rate near 45 fps. Nothing is redrawn while nothing changes, and dragging or typing always follows your display.",
             select,
         ))
         .children(warn.map(|hz| {
             div().px(px(16.)).pb(px(12.)).child(ui::info_bar(
                 ui::Severity::Warning,
                 format!("{hz} Hz uses about {}x the CPU of Balanced", (hz as f32 / crate::workspace::balanced_fps(hz) as f32).round() as u32),
-                format!("Vault Patcher would redraw {hz} times a second while animating, for no visible benefit in a settings app. Balanced or 60 fps is recommended."),
+                format!("Vaulter would redraw {hz} times a second while animating, for no visible benefit in a settings app. Balanced or 60 fps is recommended."),
             ))
         }))
         .into_any_element()
@@ -125,7 +125,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(ui::divider())
         .child(setting_row(
             "Menu music",
-            "Loops the launcher's music while Vault Patcher is open.",
+            "Loops the launcher's music while Vaulter is open.",
             ui::toggle_if(sounds && !muted, "set-music", music && !muted && sounds)
                 .when(!sounds || muted, |d| {
                     d.tooltip(ui::tip(if sounds { "Turn on button sounds first" } else { "No launcher sounds found on this PC" }))
@@ -268,7 +268,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child({
             let dir = backup::data_dir();
             setting_row(
-                "Where Vault Patcher keeps its data",
+                "Where Vaulter keeps its data",
                 format!("Settings, backups, profiles and cached images: {}", dir.display()),
                 ui::button("open-data", "Open folder", Some(Icon::Folder), Variant::Secondary)
                     .on_click(move |_, _, cx| {
@@ -288,7 +288,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         _ => "Couldn't check for updates (offline?).".into(),
     };
     let diag_ws = ws.clone();
-    let version_title = format!("Vault Patcher {}", env!("CARGO_PKG_VERSION"));
+    let version_title = format!("Vaulter {}", env!("CARGO_PKG_VERSION"));
     let version_row = match app_update {
         Some((tag, page)) => setting_row(
             version_title,
@@ -348,7 +348,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(ui::title("About Vault Patcher"))
+                        .child(ui::title("About Vaulter"))
                         .child(ui::caption(format!("Version {} · not affiliated with Gearbox or 2K", env!("CARGO_PKG_VERSION")))),
                 )
                 .child(div().size(px(32.)).flex().flex_none().items_center().justify_center().child(
@@ -387,7 +387,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .flex()
         .flex_col()
         .gap(px(24.))
-        .child(page_header("App settings", "Preferences for Vault Patcher itself.", vec![]))
+        .child(page_header("App settings", "Preferences for Vaulter itself.", vec![]))
         .child(section("Appearance and sound", appearance))
         .child(section(&format!("{} folders", def.name), folders))
         .child(section("Behavior", behavior))
@@ -529,5 +529,5 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
 }
 
 fn file_name_for(path: &std::path::Path) -> String {
-    format!("vault-patcher-{}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "profile.json".into()))
+    format!("vaulter-{}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "profile.json".into()))
 }

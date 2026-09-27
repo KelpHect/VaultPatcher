@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 
-const USER_AGENT: &str = concat!("VaultPatcher/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Vaulter/", env!("CARGO_PKG_VERSION"));
 
 /// Shared agent with timeouts, so a stalled connection fails instead of
 /// hanging a setup run forever.
@@ -67,7 +67,7 @@ pub fn download(url: &str, dest: &Path) -> Result<()> {
     moved.with_context(|| format!("saving {}", dest.display()))
 }
 
-/// The newest Vault Patcher release: the highest version tag among recent
+/// The newest Vaulter release: the highest version tag among recent
 /// published releases. The same repo also hosts `comparisons-*` image pack
 /// releases, which `releases/latest` could return instead.
 pub fn latest_app_release(repo: &str) -> Result<(String, String)> {

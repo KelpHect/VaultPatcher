@@ -14,11 +14,11 @@ fn main() {
     #[cfg(windows)]
     {
         let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
-        let icon = out.join("vault-patcher.ico");
+        let icon = out.join("vaulter.ico");
         std::fs::write(&icon, build_ico()).expect("write icon");
         let mut res = winresource::WindowsResource::new();
-        res.set("ProductName", "Vault Patcher");
-        res.set("FileDescription", "Vault Patcher - Borderlands patcher and mod installer");
+        res.set("ProductName", "Vaulter");
+        res.set("FileDescription", "Vaulter - Borderlands patcher and mod installer");
         res.set("LegalCopyright", "GPL-3.0-or-later");
         res.set_icon(icon.to_str().expect("utf-8 path"));
         res.compile().expect("compile Windows resources");

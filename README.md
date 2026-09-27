@@ -1,6 +1,8 @@
-<img src="assets/brand/logo.png" width="96" alt="Vault Patcher logo: a cel-shaded orange vault door with a loot gem at its core">
+<img src="assets/brand/logo.png" width="96" alt="Vaulter logo: a cel-shaded orange vault door with a loot gem at its core">
 
-# Vault Patcher
+# Vaulter
+
+*Formerly Vault Patcher.*
 
 A desktop patcher, tweaker and mod installer for the Borderlands series, in the spirit of
 MarkerPatch (Dead Space 2) and Fallout 76 Quick Configuration. Built in Rust with
@@ -8,7 +10,7 @@ MarkerPatch (Dead Space 2) and Fallout 76 Quick Configuration. Built in Rust wit
 [gpui-component](https://github.com/longbridge/gpui-component).
 
 <p align="center">
-  <img src="assets/demo.gif" width="720" alt="Vault Patcher demo: the app window swings in, the Play button's light circles it, a quality select opens and picks a tier, a comparison split is dragged, and the theme wipes from dark to light">
+  <img src="assets/demo.gif" width="720" alt="Vaulter demo: the app window swings in, the Play button's light circles it, a quality select opens and picks a tier, a comparison split is dragged, and the theme wipes from dark to light">
 </p>
 
 **Borderlands 2** and **Borderlands GOTY Enhanced** are fully supported. **The Pre-Sequel** is
@@ -29,7 +31,7 @@ Toggle between modes at the top of the navigation pane.
     quality of life (vendor refills, auto pickup, loot lights, no ads, quick startup, plus
     opt-in instant vehicles and menu controls). Mods are enabled automatically.
 
-  - **Vault Patcher Community Patch**: a balance-neutral text-mod patch built on the user's
+  - **Vaulter Community Patch**: a balance-neutral text-mod patch built on the user's
     own PC from pinned upstream files. It takes the Unofficial Community Patch's bug-fix
     section (balance, loot and difficulty changes excluded), apple1417's Text Fixes, and
     Apocalyptech's Sorted Fast Travel, plus Gearbox's official hotfixes. Everything is
@@ -38,7 +40,7 @@ Toggle between modes at the top of the navigation pane.
     redistributed; see `src/textmod.rs`.
 
   *Restore vanilla* undoes everything, and every change is backed up first.
-  *Re-apply all* puts your Vault Patcher settings and upgrades back when the
+  *Re-apply all* puts your Vaulter settings and upgrades back when the
   game or its launcher rewrites them (a backup is taken first, too).
 - **Advanced**: every tweak, preset, exe patch and mod-manager tool, as described below.
 
@@ -87,12 +89,13 @@ closes).
   or right-click a mod), and core SDK modules locked.
 - **Backups**: every apply, patch and SDK install is snapshotted first and can be restored
   in one click.
-- **Portable**: settings, backups, profiles and images live in a `VaultPatcher Data`
-  folder next to `VaultPatcher.exe`, so the app and its data move together. Where that
-  folder can't be written (an exe in Program Files) it uses `%APPDATA%\VaultPatcher`
-  instead, and data an older version kept there moves next to the exe on first run.
-  `VAULT_PATCHER_DATA_DIR` overrides the location.
-- **App frame rate**: Vault Patcher redraws only while something changes, and animations
+- **Portable**: settings, backups, profiles and images live in a `Vaulter Data`
+  folder next to `Vaulter.exe`, so the app and its data move together. Where that
+  folder can't be written (an exe in Program Files) it uses `%APPDATA%\Vaulter`
+  instead. Data from Vault Patcher (a `VaultPatcher Data` folder next to the exe, or
+  `%APPDATA%\VaultPatcher`) moves over on first run. `VAULTER_DATA_DIR` overrides the
+  location.
+- **App frame rate**: Vaulter redraws only while something changes, and animations
   run at *Balanced* by default: the even fraction of your display's refresh rate nearest
   45 fps (45 at 180 Hz, 48 at 144 Hz, 40 at 120 Hz). 30 fps, 60 fps and the full display
   rate are in App settings. It's the app's own frame rate, never the game's.
@@ -119,7 +122,7 @@ closes).
   so Snap Layouts, double-click to maximize and dragging behave like any Windows app.
 - **Bundled comparison images**: our own Borderlands 2 screenshots are embedded in the exe,
   so there's no first-run download for them (see *Comparison images* above).
-- **Updates and support**: checks for a newer Vault Patcher and mod SDK at startup, and
+- **Updates and support**: checks for a newer Vaulter and mod SDK at startup, and
   *Copy diagnostics* puts a bug-report summary on the clipboard.
 - **Detection** of Steam libraries, Epic Games installs, and `Documents\My Games` config
   folders, with manual overrides.
@@ -133,7 +136,7 @@ cargo test           # unit tests
 cargo test -- --ignored --nocapture   # read-only checks against a local BL2 install
 ```
 
-`cargo build --release` produces one self-contained `VaultPatcher.exe`: fonts, icons, the
+`cargo build --release` produces one self-contained `Vaulter.exe`: fonts, icons, the
 logo and the comparison images are embedded, the C runtime is linked statically
 (`.cargo/config.toml`), and the app icon is scaled at build time from
 `assets/brand/logo.png`, which Blender renders from `assets/brand/source/logo.py`
@@ -144,7 +147,7 @@ Requires Windows 10/11; Mica needs Windows 11 22H2 or later (earlier versions ge
 background). Text uses the system Segoe UI Variable (Segoe UI on Windows 10) and icons are
 drawn from the installed Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10); neither is
 bundled. Noto Sans is bundled under the OFL as a fallback for PCs missing Segoe UI.
-Set `VAULT_PATCHER_THEME=light` or `dark` to preview a theme without changing Windows.
+Set `VAULTER_THEME=light` or `dark` to preview a theme without changing Windows.
 
 ## Architecture
 
@@ -159,7 +162,7 @@ src/
   patches.rs   exe patch definitions
   workspace.rs shared app state and every mutation
   health.rs    Overview health checks and the diagnostics report
-  applied.rs   what Vault Patcher last wrote, so "Re-apply" can put it back
+  applied.rs   what Vaulter last wrote, so "Re-apply" can put it back
   profiles.rs  named settings profiles (JSON)
   compare.rs   bundled per-setting comparison images and the capture tool
   app.rs       window shell: title bar, navigation pane, page host, Apply bar, toasts, dialogs
@@ -192,7 +195,7 @@ bl-sdk projects. Not affiliated with Gearbox Software or 2K.
 
 ## License
 
-Vault Patcher is free software under the [GNU General Public License v3.0 or later](LICENSE).
+Vaulter is free software under the [GNU General Public License v3.0 or later](LICENSE).
 Bundled assets keep their own licenses: Noto Sans (SIL OFL, `assets/fonts/NotoSans-OFL.txt`).
 Borderlands is a trademark of Gearbox Software; this project isn't affiliated with Gearbox
 or 2K.

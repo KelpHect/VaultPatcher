@@ -3,7 +3,7 @@
 //! Images are captured on the user's own PC by the capture tool: for every
 //! value of a setting it writes the config, launches the game straight into a
 //! save (via the Quick Startup mod's `-Character=` switch), and a tiny helper
-//! SDK mod hides the HUD, takes a screenshot and quits. Vault Patcher never
+//! SDK mod hides the HUD, takes a screenshot and quits. Vaulter never
 //! ships third-party screenshots; settings Nvidia covered also link to its
 //! interactive comparison page.
 
@@ -261,12 +261,12 @@ const HELPER_DIR: &str = "sdk_mods/vault_capture";
 
 /// The in-game half of the capture tool. It does nothing unless
 /// `job.json` exists next to it, which only happens during a capture run.
-const HELPER_PY: &str = r#""""Vault Patcher comparison capture helper.
+const HELPER_PY: &str = r#""""Vaulter comparison capture helper.
 
-Only active while Vault Patcher is capturing comparison images: it gets the
+Only active while Vaulter is capturing comparison images: it gets the
 game into a save (driving the title screen when the game has no load switch),
 waits for the world to settle, closes popups, hides the HUD and weapon, tells
-Vault Patcher to grab the frame, then quits. Removed automatically when the
+Vaulter to grab the frame, then quits. Removed automatically when the
 capture run ends.
 """
 
@@ -398,7 +398,7 @@ def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
         _hide_weapon(obj)
         _state["stage"], _state["elapsed"] = 1, 0.0
     elif stage == 1 and _state["elapsed"] >= 1.5:
-        # Vault Patcher grabs the frame from the window, then answers.
+        # Vaulter grabs the frame from the window, then answers.
         _close_dialogs()
         (_DIR / "ready.flag").write_text(token)
         logging.info("[vault_capture] ready for capture")
@@ -413,10 +413,10 @@ def _tick(obj: Any, args: Any, _ret: Any, _func: Any) -> None:
 
 
 build_mod(
-    name="Vault Patcher Capture Helper",
-    author="Vault Patcher",
+    name="Vaulter Capture Helper",
+    author="Vaulter",
     version="1.1",
-    description="Takes comparison screenshots during a Vault Patcher capture run. Inactive otherwise.",
+    description="Takes comparison screenshots during a Vaulter capture run. Inactive otherwise.",
     hooks=[_tick],
     auto_enable=True,
     on_enable=_load_job,
@@ -610,7 +610,7 @@ fn recover_one(marker: &Path) -> Result<String> {
         bail!("an unfinished comparison capture left a damaged record; restore \"Before comparison capture\" from Backups if your settings look wrong");
     };
     if game_running(&m.exe) {
-        bail!("a comparison capture didn't finish; close the game and restart Vault Patcher to put your settings back");
+        bail!("a comparison capture didn't finish; close the game and restart Vaulter to put your settings back");
     }
     let snapshot = backup::load(&m.snapshot).context("the unfinished capture's settings snapshot is gone")?;
     backup::restore(&snapshot).context("putting your settings back after an unfinished capture")?;
@@ -766,7 +766,7 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
 // still downloaded as a fallback for games with comparisons but no bundled set.
 
 /// GitHub repository whose releases host the comparison packs.
-pub const IMAGE_REPO: &str = "KelpHect/VaultPatcher";
+pub const IMAGE_REPO: &str = "KelpHect/Vaulter";
 
 /// The image sets compiled into the exe, one folder per game id.
 #[derive(rust_embed::RustEmbed)]
@@ -784,7 +784,7 @@ pub fn has_local_images(game_id: &str) -> bool {
 /// Downloads and unpacks the published image pack for a game. Fallback for
 /// games whose set isn't bundled into the exe.
 pub fn download_pack(game_id: &str) -> Result<usize> {
-    let tmp = std::env::temp_dir().join(format!("vaultpatcher-comparisons-{game_id}.zip"));
+    let tmp = std::env::temp_dir().join(format!("vaulter-comparisons-{game_id}.zip"));
     crate::core::net::download(&pack_url(game_id), &tmp)?;
     let count = unpack_pack(&tmp, &comparisons_dir().join(game_id));
     fs::remove_file(&tmp).ok();
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn stores_frames_as_resized_jpeg() {
-        let dir = std::env::temp_dir().join("vaultpatcher-compare-test");
+        let dir = std::env::temp_dir().join("vaulter-compare-test");
         let _ = fs::remove_dir_all(&dir);
         let frame = image::RgbImage::from_pixel(2560, 1440, image::Rgb([200, 120, 20]));
         let dest = dir.join("out/on.jpg");
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn image_packs_only_unpack_plain_jpegs() {
         use std::io::Write as _;
-        let dir = std::env::temp_dir().join("vaultpatcher-pack-test");
+        let dir = std::env::temp_dir().join("vaulter-pack-test");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let zip_path = dir.join("pack.zip");
@@ -931,7 +931,7 @@ mod tests {
 
     #[test]
     fn bundled_images_never_replace_user_captures() {
-        let dest = std::env::temp_dir().join("vaultpatcher-extract-test");
+        let dest = std::env::temp_dir().join("vaulter-extract-test");
         let _ = fs::remove_dir_all(&dest);
         let total = extract_pack_to("bl2", &dest);
         assert!(total > 0);
@@ -986,7 +986,7 @@ mod run_tests {
     /// configs back byte for byte, remove its helper and mark itself finished.
     #[test]
     fn failed_capture_restores_everything() {
-        let base = std::env::temp_dir().join("vaultpatcher-capture-fail");
+        let base = std::env::temp_dir().join("vaulter-capture-fail");
         let _ = fs::remove_dir_all(&base);
         let config_dir = base.join("Config");
         let root = base.join("Game");
@@ -1024,7 +1024,7 @@ mod run_tests {
     #[test]
     fn an_interrupted_capture_is_undone_on_the_next_start() {
         let game = "test-capture-recover";
-        let base = std::env::temp_dir().join("vaultpatcher-capture-recover");
+        let base = std::env::temp_dir().join("vaulter-capture-recover");
         let _ = fs::remove_dir_all(&base);
         let ini = base.join("Config/WillowEngine.ini");
         let helper = base.join("Game").join(HELPER_DIR);

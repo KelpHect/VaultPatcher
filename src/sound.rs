@@ -2,7 +2,7 @@
 //!
 //! Borderlands 2's launcher ships its UI sounds as plain MP3s in
 //! `Binaries\Win32\Audio` (ButtonClick, MouseOver, Applied, Whoosh, Music).
-//! Vault Patcher plays those straight from the install, so the app bundles
+//! Vaulter plays those straight from the install, so the app bundles
 //! no audio; without a detected install it is simply silent.
 
 use std::io::Cursor;

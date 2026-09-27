@@ -40,11 +40,11 @@ pub struct AppSettings {
     pub music: bool,
     /// The first-run welcome has been dismissed.
     pub welcomed: bool,
-    /// How often Vault Patcher redraws its own window (not the game).
+    /// How often Vaulter redraws its own window (not the game).
     pub frame_rate: AppFrameRate,
 }
 
-/// Vault Patcher's own frame rate while it animates. Nothing redraws at all
+/// Vaulter's own frame rate while it animates. Nothing redraws at all
 /// while nothing changes, and input is never capped (see
 /// `gpui::set_max_frame_rate`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,9 +166,9 @@ pub enum LaunchMode {
 pub enum SetupGoal {
     /// Install the selected components that aren't active yet.
     Install,
-    /// Remove every component Vault Patcher installed.
+    /// Remove every component Vaulter installed.
     Uninstall,
-    /// Put back everything Vault Patcher wrote: settings the game or its
+    /// Put back everything Vaulter wrote: settings the game or its
     /// launcher rewrote, exe patches a file check reverted, missing files.
     Reapply,
 }
@@ -184,7 +184,7 @@ pub struct SetupRun {
 const SETTINGS_STEP: &str = "Your settings";
 const PATCHES_STEP: &str = "Exe patches";
 
-/// Whether "Re-apply" re-runs a setup component: only one Vault Patcher
+/// Whether "Re-apply" re-runs a setup component: only one Vaulter
 /// installed that has gone missing. Never something the user didn't
 /// install or removed, however recommended. Settings bundles and exe
 /// patches come back through the re-apply record instead (their values and
@@ -239,7 +239,7 @@ pub struct Undo {
 /// Newer versions found online (checked once at startup).
 #[derive(Default)]
 pub struct Updates {
-    /// (tag, release page) of a newer Vault Patcher.
+    /// (tag, release page) of a newer Vaulter.
     pub app: Option<(String, String)>,
     /// Latest mod SDK release tag, per SDK repo (BL1E's SDK isn't BL2's).
     pub sdk: HashMap<&'static str, String>,
@@ -331,7 +331,7 @@ pub struct GameState {
     launcher_file: Option<PathBuf>,
     /// Saved profiles, re-read when they change.
     pub profiles: Vec<crate::profiles::Entry>,
-    /// What Vault Patcher last wrote, for "Re-apply" (see `applied.rs`).
+    /// What Vaulter last wrote, for "Re-apply" (see `applied.rs`).
     pub applied: crate::applied::Applied,
 }
 
@@ -829,7 +829,7 @@ impl Workspace {
         if value == on_disk {
             game.pending.remove(tweak.id);
             // Nothing to write, but picking what's on disk over the value
-            // Vault Patcher remembered accepts it: no more drift warning,
+            // Vaulter remembered accepts it: no more drift warning,
             // and Re-apply won't put the old value back.
             if game.current(tweak).as_ref() == Some(&value)
                 && game.applied.differs(tweak, &value)
@@ -1074,7 +1074,7 @@ impl Workspace {
 
     // ---- updates -------------------------------------------------------------
 
-    /// One background check per launch: a newer Vault Patcher, and the latest
+    /// One background check per launch: a newer Vaulter, and the latest
     /// mod SDK. Silent without a network.
     fn check_updates(&mut self, cx: &mut Context<Self>) {
         let mut repos: Vec<&'static str> = self.games.iter().filter_map(|g| g.def.mods).map(|m| m.sdk_repo).collect();
@@ -1139,7 +1139,7 @@ impl Workspace {
         }
         let mut config = ConfigSet::load(&dir, def.ini_files);
         let existing: Vec<PathBuf> = config.files().filter(|(_, f)| f.exists).map(|(_, f)| f.path.clone()).collect();
-        if !game.backups.iter().any(|b| b.label == backup::ORIGINAL_LABEL) {
+        if !game.backups.iter().any(backup::is_original) {
             backup::create(def.id, backup::ORIGINAL_LABEL, &existing).context("saving your original settings")?;
         }
         // What every tweak reads before the edit, so afterwards we know
@@ -1487,7 +1487,7 @@ impl Workspace {
             let status = self.component_status(c);
             let ours = setup::installed_by_us(c, game, &launch_args);
             match goal {
-                // Only undo what Vault Patcher itself installed or applied
+                // Only undo what Vaulter itself installed or applied
                 // (an exe patch only while it's actually on).
                 SetupGoal::Uninstall => ours && (!matches!(c.kind, ComponentKind::ExePatch(_)) || status.is_active()),
                 SetupGoal::Install => {
@@ -1545,7 +1545,7 @@ impl Workspace {
             self.toast(
                 ToastKind::Info,
                 match goal {
-                    SetupGoal::Uninstall => "Nothing to restore: no Vault Patcher components are active.",
+                    SetupGoal::Uninstall => "Nothing to restore: no Vaulter components are active.",
                     SetupGoal::Install => "Everything selected is already installed.",
                     SetupGoal::Reapply => {
                         "Nothing to re-apply: no settings or upgrades have been applied yet."
@@ -1672,7 +1672,7 @@ impl Workspace {
     }
 
     /// One-click recovery for when the game, its launcher or a file check
-    /// rewrote what Vault Patcher set up: re-runs the upgrades that need it,
+    /// rewrote what Vaulter set up: re-runs the upgrades that need it,
     /// then puts every remembered setting value and exe patch back.
     pub fn reapply_all(&mut self, cx: &mut Context<Self>) {
         if self.setup_running() {
@@ -1703,7 +1703,7 @@ impl Workspace {
         }
     }
 
-    /// The user changed things outside Vault Patcher on purpose: what's on
+    /// The user changed things outside Vaulter on purpose: what's on
     /// disk now becomes what Re-apply puts back, for everything it already
     /// remembers (settings and exe patches alike).
     pub fn keep_current(&mut self, cx: &mut Context<Self>) {
@@ -2824,7 +2824,7 @@ fn prune_backups(game_id: &str, max: Option<usize>) {
             .iter()
             .all(|f| f.original.extension().is_some_and(|e| e.eq_ignore_ascii_case("ini")))
     };
-    let prunable = |b: &Backup| config_only(b) && b.label != backup::ORIGINAL_LABEL;
+    let prunable = |b: &Backup| config_only(b) && !backup::is_original(b);
     for old in backup::list(game_id).into_iter().filter(prunable).skip(max) {
         let _ = backup::delete(&old);
     }
@@ -2992,7 +2992,7 @@ mod run_watch_tests {
     fn factory_settings_agree_on_the_framerate_limit() {
         let def = &crate::games::bl2::GAME;
         assert!(factory_tweaks(def).all(|t| t.category != "quick"));
-        let dir = std::env::temp_dir().join("vaultpatcher-factory-fps");
+        let dir = std::env::temp_dir().join("vaulter-factory-fps");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("LauncherConfig")).unwrap();
         std::fs::write(dir.join("WillowEngine.ini"), "[SystemSettings]\r\nFramerateLocking=6\r\n[Engine.Engine]\r\nbSmoothFrameRate=FALSE\r\n").unwrap();

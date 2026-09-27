@@ -31,7 +31,7 @@ pub struct Check {
 pub enum Fix {
     /// Go to the page where it's fixed.
     Go(PageKind),
-    /// Put back everything Vault Patcher wrote.
+    /// Put back everything Vaulter wrote.
     Reapply,
     /// Keep what's on disk now: Re-apply stops putting the old values back.
     KeepCurrent,
@@ -98,7 +98,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         out.push(check(Level::Info, "Game is running", "Close it before changing settings or installing anything.", None));
     }
 
-    if game.config_found() && !game.backups.iter().any(|b| b.label == backup::ORIGINAL_LABEL) {
+    if game.config_found() && !game.backups.iter().any(backup::is_original) {
         out.push(check(
             Level::Info,
             "No original-settings backup yet",
@@ -131,7 +131,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
                 )),
                 _ => out.push(check(Level::Ok, format!("Mod SDK {v}"), "Up to date.", None)),
             },
-            SdkStatus::Detected => out.push(check(Level::Ok, "Mod SDK installed", "Installed outside Vault Patcher.", None)),
+            SdkStatus::Detected => out.push(check(Level::Ok, "Mod SDK installed", "Installed outside Vaulter.", None)),
             SdkStatus::Legacy => out.push(check(
                 Level::Warn,
                 "Old PythonSDK installed",
@@ -160,7 +160,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         ));
     }
 
-    // Something rewrote what Vault Patcher last saved: the game's launcher
+    // Something rewrote what Vaulter last saved: the game's launcher
     // keeping its own video settings, an in-game menu, "verify files"...
     // (Without the settings files every value would look changed; that has
     // its own check above.)
@@ -176,7 +176,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         }
         out.push(Check {
             level: Level::Warn,
-            title: format!("{} changed outside Vault Patcher", parts.join(" · ")),
+            title: format!("{} changed outside Vaulter", parts.join(" · ")),
             detail: "Re-apply puts them back. Changed them in the game on purpose? Keep them.".into(),
             fixes: vec![("Re-apply", Fix::Reapply), ("Keep", Fix::KeepCurrent)],
         });
@@ -202,7 +202,7 @@ fn applied_patches_reverted(game: &crate::workspace::GameState) -> usize {
 /// personal files.
 pub fn diagnostics(ws: &Workspace) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "Vault Patcher {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(s, "Vaulter {}", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(s, "OS: {} {}", std::env::consts::OS, std::env::consts::ARCH);
     match crate::core::gpu::best() {
         Some(g) => {

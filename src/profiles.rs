@@ -51,7 +51,7 @@ pub fn list(game_id: &str) -> Vec<Entry> {
 
 pub fn read(path: &Path) -> Result<Profile> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text).context("not a Vault Patcher profile")
+    serde_json::from_str(&text).context("not a Vaulter profile")
 }
 
 pub fn write(profile: &Profile, path: &Path) -> Result<()> {
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn profile_names_never_share_a_file() {
-        let dir = std::env::temp_dir().join("vaultpatcher-profile-names");
+        let dir = std::env::temp_dir().join("vaulter-profile-names");
         let _ = std::fs::remove_dir_all(&dir);
         let def = &crate::games::bl2::GAME;
         let save = |name: &str| {

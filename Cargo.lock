@@ -6775,7 +6775,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vault_patcher"
+name = "vaulter"
 version = "2.2.0"
 dependencies = [
  "anyhow",

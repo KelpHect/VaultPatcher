@@ -1,14 +1,14 @@
 [package]
-name = "vault_patcher"
+name = "vaulter"
 version = "2.2.0"
 edition = "2024"
 description = "Patcher, tweaker and mod installer for the Borderlands series"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/KelpHect/VaultPatcher"
+repository = "https://github.com/KelpHect/Vaulter"
 build = "build.rs"
 
 [[bin]]
-name = "VaultPatcher"
+name = "Vaulter"
 path = "src/main.rs"
 
 [dependencies]

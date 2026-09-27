@@ -1,4 +1,4 @@
-//! Crash-safe file replacement for everything Vault Patcher writes: game
+//! Crash-safe file replacement for everything Vaulter writes: game
 //! configs, the game exe, installed files and its own records.
 
 use std::fs;
@@ -64,7 +64,7 @@ fn temp_beside(path: &Path) -> PathBuf {
 pub fn temp_file(name: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("vaultpatcher-{}-{n}-{name}", std::process::id()))
+    std::env::temp_dir().join(format!("vaulter-{}-{n}-{name}", std::process::id()))
 }
 
 #[cfg(test)]
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     fn sandbox(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("vaultpatcher-atomic-{name}"));
+        let dir = std::env::temp_dir().join(format!("vaulter-atomic-{name}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn unreadable_files_are_never_overwritten() {
-        let dir = std::env::temp_dir().join("vaultpatcher-unreadable-test");
+        let dir = std::env::temp_dir().join("vaulter-unreadable-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Good.ini"), "[A]\r\nB=1\r\n").unwrap();
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn saving_a_locked_file_keeps_the_lock() {
         use crate::core::backup;
-        let dir = std::env::temp_dir().join("vaultpatcher-config-lock");
+        let dir = std::env::temp_dir().join("vaulter-config-lock");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Engine.ini");

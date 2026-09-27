@@ -44,7 +44,8 @@ pub fn system_theme() -> SystemTheme {
             .and_then(|v| parse_accent_palette(&v.bytes))
             .unwrap_or(DEFAULT_ACCENT);
         // For checking both themes without changing Windows settings.
-        let dark = match std::env::var("VAULT_PATCHER_THEME").as_deref() {
+        let theme = std::env::var("VAULTER_THEME").or_else(|_| std::env::var("VAULT_PATCHER_THEME"));
+        let dark = match theme.as_deref() {
             Ok("light") => false,
             Ok("dark") => true,
             _ => dark,
@@ -83,7 +84,7 @@ pub fn animations_enabled() -> bool {
 }
 
 /// Hands the process's unused memory back to Windows (its working set is
-/// trimmed; pages come back on demand). Used when Vault Patcher goes into
+/// trimmed; pages come back on demand). Used when Vaulter goes into
 /// background mode, so a running game has that RAM.
 pub fn trim_memory() {
     #[cfg(windows)]
@@ -130,7 +131,7 @@ pub fn apply_mica(window: &gpui::Window) -> bool {
         let backdrop = DWMSBT_MAINWINDOW;
         let corners = DWMWCP_ROUND;
         // Mica's tint follows the frame's dark mode; match our theme (which
-        // VAULT_PATCHER_THEME can override) rather than the system's.
+        // VAULTER_THEME can override) rather than the system's.
         let dark = i32::from(system_theme().dark);
         // The backdrop shows through wherever the client area is transparent;
         // gpui renders through DirectComposition with premultiplied alpha.

@@ -143,7 +143,7 @@ mod install_tests {
     use super::*;
 
     fn sandbox(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("vaultpatcher-manifest-{name}"));
+        let dir = std::env::temp_dir().join(format!("vaulter-manifest-{name}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

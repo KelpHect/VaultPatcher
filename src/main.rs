@@ -3,7 +3,7 @@
 
 // Windows and Linux only; the vendored gpui fork carries no macOS backend.
 #[cfg(target_os = "macos")]
-compile_error!("Vault Patcher doesn't support macOS (Windows and Linux only).");
+compile_error!("Vaulter doesn't support macOS (Windows and Linux only).");
 
 mod app;
 mod applied;
@@ -52,13 +52,13 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Vault Patcher".into()),
+                    title: Some("Vaulter".into()),
                     appears_transparent: true,
                     traffic_light_position: None,
                 }),
                 window_min_size: Some(size(px(960.), px(600.))),
                 window_background: WindowBackgroundAppearance::Opaque,
-                app_id: Some("VaultPatcher".into()),
+                app_id: Some("Vaulter".into()),
                 ..Default::default()
             },
             |window, cx| {

@@ -37,7 +37,7 @@ const PLAYER_INPUT: &str = "Engine.PlayerInput";
 
 pub const CATEGORIES: &[Category] = &[
     Category { id: "quick", title: "Quick", blurb: "Friendly combined settings used by Simple mode." },
-    Category { id: "display", title: "Display", blurb: "Window mode, resolution and sync. The launcher keeps its own copy of these, so Vault Patcher updates both." },
+    Category { id: "display", title: "Display", blurb: "Window mode, resolution and sync. The launcher keeps its own copy of these, so Vaulter updates both." },
     Category { id: "framerate", title: "Framerate", blurb: "Frame caps and smoothing. Pick \"Smoothed\" and set the range for a custom cap such as 141–142 FPS." },
     Category { id: "quality", title: "World detail", blurb: "Draw distance, level of detail, foliage and decals." },
     Category { id: "aa", title: "Anti-aliasing & filtering", blurb: "The game is DirectX 9 only. FXAA is the built-in option; for better AA use driver SGSSAA or a ReShade SMAA preset." },
@@ -665,7 +665,7 @@ pub const TWEAKS: &[Tweak] = &[
 ];
 
 /// Written next to the exe when DXVK is installed.
-pub const DXVK_CONF: &str = "# Vault Patcher DXVK profile for Borderlands 2 / The Pre-Sequel\n\
+pub const DXVK_CONF: &str = "# Vaulter DXVK profile for Borderlands 2 / The Pre-Sequel\n\
 # Lower latency: at most one frame queued ahead of the GPU.\n\
 d3d9.maxFrameLatency = 1\n\
 # Force 16x anisotropic filtering on every texture.\n\
@@ -883,7 +883,7 @@ const TEXT_MOD_LOADER: Component = Component {
 
 const COMMUNITY_PATCH: Component = Component {
     id: "community_patch",
-    name: "Vault Patcher Community Patch",
+    name: "Vaulter Community Patch",
     summary: "Hundreds of bug fixes, no balance changes",
     description: "Built on your PC from the Unofficial Community Patch's bug-fix section (rarity, skill, item, skin, audio and enemy loot-table fixes), apple1417's text fixes and Apocalyptech's alphabetical fast travel list, plus auto-pickup of Eridium, Torgue Tokens and Seraph crystals and tracked gear skills on the HUD. Balance, loot and difficulty changes are left out. Gearbox's official hotfixes are included, so it works offline.",
     group: Group::Fixes,
@@ -1205,7 +1205,7 @@ mod live_tests {
     #[ignore]
     fn live_every_tweak_writes_and_reads_back() {
         let Some(dir) = config_dir() else { return };
-        let sandbox = std::env::temp_dir().join("vaultpatcher-sandbox");
+        let sandbox = std::env::temp_dir().join("vaulter-sandbox");
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(sandbox.join("LauncherConfig")).unwrap();
         for (_, name) in INI_FILES {

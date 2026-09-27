@@ -52,12 +52,12 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
 
     // Original settings pinned first, then newest-first with consecutive
     // repeats of the same action collapsed into one row.
-    let mut ordered: Vec<&Backup> = game.backups.iter().filter(|b| b.label == backup::ORIGINAL_LABEL).collect();
-    ordered.extend(game.backups.iter().filter(|b| b.label != backup::ORIGINAL_LABEL));
+    let mut ordered: Vec<&Backup> = game.backups.iter().filter(|b| backup::is_original(b)).collect();
+    ordered.extend(game.backups.iter().filter(|b| !backup::is_original(b)));
     let mut groups: Vec<(&Backup, usize)> = Vec::new();
     for b in ordered {
         match groups.last_mut() {
-            Some((first, n)) if first.label == b.label && b.label != backup::ORIGINAL_LABEL => *n += 1,
+            Some((first, n)) if first.label == b.label && !backup::is_original(b) => *n += 1,
             _ => groups.push((b, 1)),
         }
     }
@@ -65,14 +65,14 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let mut list = ui::panel().flex().flex_col();
     if groups.is_empty() {
         list = list.child(div().px(px(16.)).py(px(20.)).child(ui::body(
-            "Nothing here yet. Vault Patcher saves your files automatically before every change it makes.",
+            "Nothing here yet. Vaulter saves your files automatically before every change it makes.",
         )));
     }
     for (i, (b, repeats)) in groups.into_iter().enumerate() {
         if i > 0 {
             list = list.child(ui::divider());
         }
-        let original = b.label == backup::ORIGINAL_LABEL;
+        let original = backup::is_original(b);
         let restore_ws = ws.clone();
         let delete_ws = ws.clone();
         let label = b.label.clone();
@@ -171,9 +171,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(page_header(
             "Backups",
             if simple {
-                "Your undo history. Every change Vault Patcher makes is backed up first, and your original settings are kept forever. Restoring anything backs up the current files first."
+                "Your undo history. Every change Vaulter makes is backed up first, and your original settings are kept forever. Restoring anything backs up the current files first."
             } else {
-                "Every change Vault Patcher makes is backed up first. Your original settings are kept forever; restoring anything backs up the current files first."
+                "Every change Vaulter makes is backed up first. Your original settings are kept forever; restoring anything backs up the current files first."
             },
             actions,
         ))

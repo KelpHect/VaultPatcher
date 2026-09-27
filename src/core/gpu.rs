@@ -28,7 +28,7 @@ fn probe() -> Option<Gpu> {
     unsafe {
         let entry = ash::Entry::load().ok()?;
         let app = vk::ApplicationInfo::default()
-            .application_name(c"Vault Patcher")
+            .application_name(c"Vaulter")
             .api_version(vk::make_api_version(0, 1, 1, 0));
         let info = vk::InstanceCreateInfo::default().application_info(&app);
         let instance = entry.create_instance(&info, None).ok()?;

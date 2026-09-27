@@ -116,7 +116,7 @@ pub enum ComponentKind {
 }
 
 /// One upstream text mod, downloaded on the user's machine and filtered to
-/// the categories we want. Nothing is redistributed by Vault Patcher.
+/// the categories we want. Nothing is redistributed by Vaulter.
 #[derive(Clone, Copy)]
 pub struct TextSource {
     pub title: &'static str,
@@ -271,7 +271,7 @@ pub fn status(c: &Component, game: &GameState, launch_args: &[String]) -> Status
     }
 }
 
-/// Whether Vault Patcher itself installed/applied `c` (so "Restore vanilla"
+/// Whether Vaulter itself installed/applied `c` (so "Restore vanilla"
 /// may undo it). Things the player installed by hand are left alone.
 pub fn installed_by_us(c: &Component, game: &GameState, launch_args: &[String]) -> bool {
     match c.kind {
@@ -569,8 +569,8 @@ pub fn rebuild_text_patch(
     let text = textmod::merge(
         &MergeInfo {
             game: game_tag,
-            title: "Vault Patcher Community Patch",
-            author: "Vault Patcher (built from community mods)",
+            title: "Vaulter Community Patch",
+            author: "Vaulter (built from community mods)",
             version: env!("CARGO_PKG_VERSION"),
             description: "Balance-neutral bug fixes and quality of life, merged into one file so Text Mod Loader can run them together.",
         },
@@ -670,7 +670,7 @@ mod live_tests {
                     _ => None,
                 };
                 if let Some(url) = url {
-                    let status = ureq::head(url).set("User-Agent", "VaultPatcher-test").call().map(|r| r.status());
+                    let status = ureq::head(url).set("User-Agent", "Vaulter-test").call().map(|r| r.status());
                     println!("{:<5} {:<16} {:?}", game.id, c.id, status);
                     assert_eq!(status.ok(), Some(200), "{} {}", game.id, c.id);
                 }
@@ -684,7 +684,7 @@ mod live_tests {
     #[ignore]
     fn live_community_patch_builds() {
         let game = &crate::games::bl2::GAME;
-        let root = std::env::temp_dir().join("vaultpatcher-textpatch-sandbox");
+        let root = std::env::temp_dir().join("vaulter-textpatch-sandbox");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("Binaries")).unwrap();
         let parts: Vec<(&str, &[TextSource])> = game
@@ -732,7 +732,7 @@ mod live_tests {
     #[test]
     #[ignore]
     fn live_sdk_mod_installs_and_is_enabled() {
-        let root = std::env::temp_dir().join("vaultpatcher-mod-sandbox");
+        let root = std::env::temp_dir().join("vaulter-mod-sandbox");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         install_file(
@@ -756,7 +756,7 @@ mod live_tests {
     #[test]
     #[ignore]
     fn live_dxvk_installs_into_sandbox_and_uninstalls() {
-        let root = std::env::temp_dir().join("vaultpatcher-dxvk-sandbox");
+        let root = std::env::temp_dir().join("vaulter-dxvk-sandbox");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("Binaries/Win32")).unwrap();
         let version = install_dxvk("sandbox", "dxvk", &root, DxvkTarget::D3d9Win32, "Binaries/Win32", "x = 1\n").unwrap();
@@ -779,7 +779,7 @@ mod live_tests {
     #[ignore]
     fn live_bl1e_components_install_and_uninstall() {
         let game = &crate::games::bl1e::GAME;
-        let root = std::env::temp_dir().join("vaultpatcher-bl1e-install-sandbox");
+        let root = std::env::temp_dir().join("vaulter-bl1e-install-sandbox");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("Binaries/Win64")).unwrap();
         let upk = root.join("WillowGame/CookedPC/Packages/Interface/ui_frontend_upsell_PC.upk");

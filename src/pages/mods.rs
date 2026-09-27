@@ -24,7 +24,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .flex_col()
             .gap(px(20.))
             .child(page_header("Mods", "SDK mods and text mods for this game.", vec![]))
-            .child(missing_notice("Game install not found", "Mods are installed into the game folder, so Vault Patcher needs to know where it is.", ws))
+            .child(missing_notice("Game install not found", "Mods are installed into the game folder, so Vaulter needs to know where it is.", ws))
             .into_any_element();
     };
 
@@ -127,7 +127,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             .when(matches!(game.sdk, SdkStatus::Installed(_)), |d| {
                 d.child(ui::icon_button("sdk-remove", Icon::Delete, theme::text_muted()).tooltip(ui::tip("Uninstall the SDK")).on_click(move |_, window, cx| {
                     let ws = uninstall_ws.clone();
-                    confirm(window, cx, "Uninstall the SDK?", "Removes the files Vault Patcher installed. Your mods and their settings stay in sdk_mods.", "Uninstall", move |cx| {
+                    confirm(window, cx, "Uninstall the SDK?", "Removes the files Vaulter installed. Your mods and their settings stay in sdk_mods.", "Uninstall", move |cx| {
                         ws.update(cx, |ws, cx| ws.uninstall_sdk(cx))
                     });
                 }))

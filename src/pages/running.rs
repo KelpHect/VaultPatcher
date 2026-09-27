@@ -1,6 +1,6 @@
 //! Shown in place of the page while the selected game is running: editing
 //! settings then is pointless (the game rewrites its config files on exit),
-//! so this offers to force-close the game or tuck Vault Patcher away in a
+//! so this offers to force-close the game or tuck Vaulter away in a
 //! quiet background mode until the game exits.
 
 use gpui::{AnyElement, App, Entity, IntoElement, ParentElement, Styled, Window, div, prelude::*, px};
@@ -54,7 +54,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .gap(px(8.))
                 .child(
                     ui::button("running-minimize", "Minimize to background", Some(Icon::Minimize), Variant::Primary)
-                        .tooltip(ui::tip("Mutes Vault Patcher and checks in every 10 seconds. It comes back when you quit the game."))
+                        .tooltip(ui::tip("Mutes Vaulter and checks in every 10 seconds. It comes back when you quit the game."))
                         .on_click(move |_, window, cx| {
                             if minimize_ws.update(cx, |ws, cx| ws.enter_background(cx)) {
                                 window.minimize_window();
