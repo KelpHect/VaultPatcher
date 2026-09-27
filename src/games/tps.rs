@@ -1,4 +1,4 @@
-//! Borderlands: The Pre-Sequel — same Willow engine branch as Borderlands 2,
+//! Borderlands: The Pre-Sequel: the same Willow engine branch as Borderlands 2,
 //! so it shares BL2's tweak catalog, SDK and pages.
 
 use super::bl2;

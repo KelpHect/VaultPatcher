@@ -112,7 +112,7 @@ fn slug(name: &str) -> String {
     }
 }
 
-/// `name`, or `name (2)`, `name (3)`… — the first no saved profile uses.
+/// `name`, or `name (2)`, `name (3)`…: the first no saved profile uses.
 pub fn unused_name(game_id: &str, name: &str) -> String {
     let dir = dir(game_id);
     let name = name.trim();

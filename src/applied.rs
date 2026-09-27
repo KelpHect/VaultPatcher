@@ -3,7 +3,7 @@
 //! The game, its launcher, an in-game menu or a file check can rewrite the
 //! ini files (or revert the exe) behind our back. This record is what
 //! "Re-apply" puts back: every tweak value last written through a config
-//! save, plus the exe patches meant to stay on. It's a merge — each write
+//! save, plus the exe patches meant to stay on. It's a merge: each write
 //! updates the tweaks it touched and leaves the rest of the record alone.
 //! Values are encoded the same way profiles encode them, so anything a
 //! profile can't carry (custom ini values we don't model) isn't remembered
@@ -21,7 +21,7 @@ use crate::core::binpatch::PatchState;
 use crate::games::GameDef;
 use crate::tweaks::{ConfigSet, Tweak, Value};
 
-/// What Vault Patcher currently has down on disk — or believes it has.
+/// What Vault Patcher currently has down on disk, or believes it has.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Applied {
@@ -87,7 +87,7 @@ impl Applied {
         }
     }
 
-    /// Whether `tweak`'s remembered value differs from `value` — i.e. the
+    /// Whether `tweak`'s remembered value differs from `value`, i.e. the
     /// user just picked the value that's on disk over the remembered one.
     pub fn differs(&self, tweak: &Tweak, value: &Value) -> bool {
         self.values
@@ -165,7 +165,7 @@ fn update_at(path: &Path, config_dir: Option<&Path>, install: Option<&Path>, f: 
 
 /// Every remembered value that still maps to a real tweak of this game (a
 /// stale id or removed option is skipped). Values are put back exactly as
-/// they were written — not snapped to the slider grid — so a hand-edited
+/// they were written, not snapped to the slider grid, so a hand-edited
 /// `PoolSize=1024` stays 1024.
 pub fn resolve(def: &GameDef, applied: &Applied) -> Vec<(&'static Tweak, Value)> {
     applied

@@ -55,11 +55,11 @@ fn probe() -> Option<Gpu> {
 /// `Ok` when DXVK 3 should run well, otherwise a short reason for the user.
 pub fn dxvk_ready() -> Result<(), String> {
     let Some(gpu) = best() else {
-        return Err("No Vulkan driver found — update your graphics driver to use DXVK".into());
+        return Err("No Vulkan driver found. Update your graphics driver to use DXVK".into());
     };
     if (gpu.api_major, gpu.api_minor) < (1, 4) {
         return Err(format!(
-            "{} reports Vulkan {}.{}; DXVK needs 1.4 — update your graphics driver",
+            "{} reports Vulkan {}.{}; DXVK needs 1.4. Update your graphics driver",
             gpu.name, gpu.api_major, gpu.api_minor
         ));
     }

@@ -263,13 +263,56 @@ pub fn accent_hi() -> Rgba {
 pub fn accent_pressed() -> Rgba {
     Rgba { a: 0.8, ..accent() }
 }
-/// TextOnAccentFillColorPrimary.
+/// TextOnAccentFillColorPrimary: white or black, whichever reads better
+/// on the accent. WinUI fixes it per theme (black in dark mode), which
+/// fails WCAG AA on darker accents such as a deep green.
 pub fn accent_ink() -> Rgba {
-    pick(0xffffffff, 0x000000ff)
+    ink_on(&[accent()])
 }
-/// AccentTextFillColorPrimary: links and accent-colored text.
+/// AccentTextFillColorPrimary: links and accent-colored text, lightened
+/// (dark mode) or darkened (light mode) until it reaches 4.5:1 on the page.
 pub fn accent_text() -> Rgba {
-    if is_dark() { accent_shade(0) } else { accent_shade(5) }
+    let base = if is_dark() { accent_shade(0) } else { accent_shade(5) };
+    readable(base, bg_deep(), 4.5)
+}
+
+/// The Play button's gradient: the accent and its neighbouring shade
+/// towards the side its text contrasts with.
+pub fn play_fill() -> (Rgba, Rgba) {
+    if is_dark() { (accent_shade(1), accent_shade(2)) } else { (accent_shade(3), accent_shade(4)) }
+}
+
+/// Relative luminance (WCAG 2).
+fn luminance(c: Rgba) -> f32 {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// WCAG contrast ratio between two opaque colors (1..21).
+pub fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// White or black text, whichever keeps the better worst-case contrast
+/// across every color in `fills` (e.g. both ends of a gradient).
+pub fn ink_on(fills: &[Rgba]) -> Rgba {
+    let worst = |ink: Rgba| fills.iter().map(|f| contrast(ink, *f)).fold(f32::MAX, f32::min);
+    let (white, black) = (rgb(0xffffff), rgb(0x000000));
+    if worst(white) >= worst(black) { white } else { black }
+}
+
+/// `color` mixed towards white or black (away from `bg`) just enough to
+/// reach `ratio` against `bg`.
+fn readable(color: Rgba, bg: Rgba, ratio: f32) -> Rgba {
+    let target = if luminance(bg) < 0.5 { rgb(0xffffff) } else { rgb(0x000000) };
+    let mix = |t: f32| Rgba {
+        r: color.r + (target.r - color.r) * t,
+        g: color.g + (target.g - color.g) * t,
+        b: color.b + (target.b - color.b) * t,
+        a: 1.,
+    };
+    (0..=20).map(|i| mix(i as f32 / 20.)).find(|c| contrast(*c, bg) >= ratio).unwrap_or(target)
 }
 
 // ---- status -------------------------------------------------------------------
@@ -765,5 +808,26 @@ impl gpui::AssetSource for Assets {
 
     fn list(&self, path: &str) -> gpui::Result<Vec<gpui::SharedString>> {
         gpui_component_assets::Assets.list(path)
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    #[test]
+    fn ink_follows_contrast_not_theme() {
+        // A deep green accent's dark-mode fill (Light2/Light1): white reads, black doesn't.
+        let white = rgb(0xffffff);
+        assert_eq!(ink_on(&[rgb(0x357c58), rgb(0x2e6a4b)]), white);
+        assert!(contrast(white, rgb(0x357c58)) >= 4.5);
+        // Windows' default blue in dark mode keeps WinUI's black.
+        assert_eq!(ink_on(&[rgb(0x4cc2ff), rgb(0x0091f8)]), rgb(0x000000));
+    }
+
+    #[test]
+    fn accent_text_reaches_aa() {
+        let fixed = readable(rgb(0x40956a), rgb(0x202020), 4.5);
+        assert!(contrast(fixed, rgb(0x202020)) >= 4.5);
     }
 }

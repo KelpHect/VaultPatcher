@@ -85,12 +85,12 @@ closes).
   in one click.
 - **Launch options** on the Overview page (`-NoLauncher`, `-NoStartupMovies` and more),
   used by the sidebar's Play button; its dropdown can also start BL2/TPS through the
-  game's own launcher, or the game exe directly no matter what the options say — and
+  game's own launcher, or the game exe directly no matter what the options say, and
   whichever you pick there becomes the Play button's default.
 - **Game running**: while a supported game runs (BL2, TPS or BL1 GOTY Enhanced), a screen
   shows the running state with *Force close* and *Minimize to background*.
-- **Minimize to background**: parks the app while the game plays — window minimized, UI
-  sounds and music muted, near-zero redraw and timer work so it sips CPU and memory — and
+- **Minimize to background**: parks the app while the game plays (window minimized, UI
+  sounds and music muted, near-zero redraw and timer work so it sips CPU and memory) and
   wakes back up when the game exits.
 - **Look and feel**: a native Windows 11 app. It follows your Windows light or dark mode
   and accent color (live, as you change them), sits on Mica with acrylic menus, tooltips

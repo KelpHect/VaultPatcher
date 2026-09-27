@@ -103,7 +103,7 @@ impl Pattern {
 pub enum PatchState {
     Unpatched,
     Patched,
-    /// Neither signature (or several matches) was found — unknown exe build.
+    /// Neither signature (or several matches) was found: an unknown exe build.
     Unsupported,
 }
 

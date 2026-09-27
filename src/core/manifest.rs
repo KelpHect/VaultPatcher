@@ -92,7 +92,7 @@ pub fn uninstall_with(game_id: &str, component: &str, root: &Path, moved: impl F
     // strand the files; refuse instead.
     if let Some(outside) = manifest.files.iter().find(|f| !inside(f, root)) {
         anyhow::bail!(
-            "{component} was installed at {} — the game folder changed, so it can't be removed safely",
+            "{component} was installed at {}, but the game folder changed, so it can't be removed safely",
             outside.display()
         );
     }

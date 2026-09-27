@@ -614,8 +614,8 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
     let helper = req.root.join(HELPER_DIR);
     let helper_settings = req.root.join("sdk_mods").join("settings").join("vault_capture.json");
 
-    // One snapshot of the configs up front — including files that don't exist
-    // yet, so any the capture creates are removed again — restored no matter
+    // One snapshot of the configs up front, including files that don't exist
+    // yet, so any the capture creates are removed again, restored no matter
     // how the run ends.
     let config_paths: Vec<PathBuf> = req.ini_files.iter().map(|(_, n)| req.config_dir.join(n)).collect();
     let snapshot = backup::create(req.game_id, "Before comparison capture", &config_paths)?;
@@ -653,7 +653,7 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
                 break;
             }
             if let Ok(mut p) = progress.lock() {
-                p.current = format!("{} — {label}", tweak.label);
+                p.current = format!("{} ({label})", tweak.label);
                 p.done = i;
             }
             let mut config = original.clone();
@@ -715,12 +715,12 @@ pub fn run(req: CaptureRequest, progress: Arc<Mutex<CaptureProgress>>) -> Result
             }
             kill_game(&req.exe);
             match frame {
-                None => log(format!("{} — {label}: timed out (did the save load?)", tweak.label)),
-                Some(Err(e)) => log(format!("{} — {label}: {e:#}", tweak.label)),
+                None => log(format!("{} ({label}): timed out (did the save load?)", tweak.label)),
+                Some(Err(e)) => log(format!("{} ({label}): {e:#}", tweak.label)),
                 Some(Ok(img)) => {
                     store_image(image::DynamicImage::ImageRgb8(img), &image_path(req.game_id, tweak.id, value))?;
                     captured += 1;
-                    log(format!("{} — {label}: captured", tweak.label));
+                    log(format!("{} ({label}): captured", tweak.label));
                 }
             }
         }
@@ -766,7 +766,7 @@ pub fn download_pack(game_id: &str) -> Result<usize> {
 }
 
 /// Copies a game's bundled images into `comparisons_dir()`, writing only
-/// files that are missing — an image already there may be the user's own
+/// files that are missing; an image already there may be the user's own
 /// re-shot capture, which always wins. Returns how many were written; zero
 /// for games with no bundled set.
 pub fn extract_pack(game_id: &str) -> usize {
@@ -798,7 +798,7 @@ fn extract_pack_to(game_id: &str, dest: &Path) -> usize {
     written
 }
 
-/// `true` for `<tweak>/<value>.jpg` entries — anything else is ignored and
+/// `true` for `<tweak>/<value>.jpg` entries; anything else is ignored and
 /// nothing can escape the destination folder.
 fn is_pack_entry(parts: &[&str]) -> bool {
     parts.len() == 2

@@ -296,7 +296,7 @@ fn install_sdk_zip_versioned(
         manifest::plan_replace(game_id, SDK, &format!("Before installing {}", support.sdk_name), &overwritten)?;
 
     // The zip never contains user mods, so everything it writes belongs to
-    // the SDK — except the settings folder, which holds the user's mod options.
+    // the SDK, except the settings folder, which holds the user's mod options.
     let settings = sdk_mods.join("settings");
     let same = |a: &Path, b: &Path| a.as_os_str().eq_ignore_ascii_case(b.as_os_str());
     let files: Vec<PathBuf> = targets.iter().map(|(_, t)| t.clone()).filter(|p| !p.starts_with(&settings)).collect();

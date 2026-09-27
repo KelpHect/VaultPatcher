@@ -1,4 +1,4 @@
-//! Borderlands 2 — the fully supported flagship title.
+//! Borderlands 2, the fully supported flagship title.
 
 use super::willow;
 use super::{COMMON_NAV, GameDef, LaunchArg, LauncherDef, ModSupport, NavGroup, NavItem, PageKind, Support};
@@ -73,7 +73,7 @@ pub const PATCHES: &[ExePatch] = &[
     ExePatch {
         id: "hex_array",
         name: "Remove the 100-item array limit",
-        description: "Lets `getall`/`obj dump` print more than 100 array entries — useful for mod authors.",
+        description: "Lets `getall`/`obj dump` print more than 100 array entries, useful for mod authors.",
         rarity: Rarity::Uncommon,
         kind: ExePatchKind::Hex {
             original: "7E 05 B9 64 00 00 00 3B F9 0F 8D",
@@ -98,7 +98,7 @@ pub const PATCHES: &[ExePatch] = &[
 
 /// The menu Gearbox runs before the game proper. It rewrites its copy of
 /// the video settings (kept in `LauncherConfig`) on every run, which is why
-/// skipping it — or re-applying afterwards — keeps your tweaks in place.
+/// skipping it, or re-applying afterwards, keeps your tweaks in place.
 pub const LAUNCHER: LauncherDef = LauncherDef {
     exe: "Binaries\\Win32\\Launcher.exe",
     skip_arg: "-NoLauncher",

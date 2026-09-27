@@ -354,7 +354,21 @@ impl Shell {
                         .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.select_game(i, cx))),
                     );
                 }
-                menu.min_w(px(PANE - 16.))
+                let ws = ws.clone();
+                menu.separator()
+                    .item(
+                        PopupMenuItem::element(|_, _| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(12.))
+                                .py(px(4.))
+                                .child(div().w(px(24.)).flex().justify_center().child(ui::icon(Icon::Refresh).text_color(theme::text())))
+                                .child(div().text_size(px(14.)).child("Search for games again"))
+                        })
+                        .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.search_again(cx))),
+                    )
+                    .min_w(px(PANE - 16.))
             })
     }
 
@@ -459,7 +473,7 @@ impl Shell {
         let tip = if can_play {
             match current_mode {
                 LaunchMode::Normal => "Start the game with your launch options",
-                LaunchMode::Direct => "Start the game exe directly — skipping the launcher",
+                LaunchMode::Direct => "Start the game exe directly, skipping the launcher",
                 LaunchMode::Launcher => "Start the game through its own launcher",
             }
         } else {
@@ -467,7 +481,9 @@ impl Shell {
         };
         let playable = can_play && !running;
         if compact {
-            let ink = move |a: f32| theme::with_alpha(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }, a);
+            let (fill_from, fill_to) = theme::play_fill();
+        let on_fill = theme::ink_on(&[fill_from, fill_to]);
+        let ink = move |a: f32| theme::with_alpha(if playable { on_fill } else { theme::accent_ink_disabled() }, a);
             let play = ui::focusable(div().id("rail-play"))
                 .size(px(40.))
                 .flex()
@@ -477,8 +493,8 @@ impl Shell {
                 .when(playable, |d| {
                     d.bg(gpui::linear_gradient(
                         135.,
-                        gpui::linear_color_stop(theme::accent(), 0.),
-                        gpui::linear_color_stop(theme::accent_hi(), 1.),
+                        gpui::linear_color_stop(fill_from, 0.),
+                        gpui::linear_color_stop(fill_to, 1.),
                     ))
                     .border_1()
                     .border_color(theme::with_alpha(theme::accent_pressed(), 0.6))
@@ -517,7 +533,9 @@ impl Shell {
         // The launch button: bigger than any other control and the one place
         // with a gradient and texture, since it's what the app builds up to.
         // A SplitButton underneath: Play on the left, ways to start on the right.
-        let ink = move |a: f32| theme::with_alpha(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }, a);
+        let (fill_from, fill_to) = theme::play_fill();
+        let on_fill = theme::ink_on(&[fill_from, fill_to]);
+        let ink = move |a: f32| theme::with_alpha(if playable { on_fill } else { theme::accent_ink_disabled() }, a);
         let subtitle: SharedString = if !game.loaded {
             "Looking for the game\u{2026}".into()
         } else if running {
@@ -533,7 +551,9 @@ impl Shell {
         };
         let hovered = self.play_hovered && playable;
         // The stripes march while the pointer is on the button.
-        let stripes_at = move |shift: f32| div().absolute().top_0().bottom_0().right_0().w(px(120.)).child(ui::stripes(ink(0.1), shift));
+        // Across the whole button, clipped by its rounded edge: the pattern
+        // repeats every period, so a loop ends exactly where it began.
+        let stripes_at = move |shift: f32| div().absolute().inset_0().overflow_hidden().child(ui::stripes(ink(0.08), shift));
         let stripes = if hovered && theme::motion() {
             div()
                 .absolute()
@@ -557,10 +577,6 @@ impl Shell {
             .rounded_l(px(theme::RADIUS_LG))
             .when(playable, |d| d.cursor_pointer().hover(|s| s.bg(ink(0.08))).active(|s| s.bg(ink(0.16))))
             .tooltip(ui::tip(if running { "Running" } else { tip }))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.play_hovered = *hovered;
-                cx.notify();
-            }))
             .when(playable, |d| d.on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx))))
             .child(stripes)
             .child(
@@ -588,7 +604,7 @@ impl Shell {
                             .text_color(ink(1.))
                             .child(if running { "Running".to_string() } else { format!("Play {short}") }),
                     )
-                    .child(div().text_size(px(12.)).line_height(px(16.)).text_color(ink(0.8)).truncate().child(subtitle)),
+                    .child(div().text_size(px(12.)).line_height(px(16.)).text_color(ink(1.)).truncate().child(subtitle)),
             );
         let chevron = Button::new("rail-play-menu")
             .custom(
@@ -600,7 +616,7 @@ impl Shell {
                     .active(ink(0.16)),
             )
             .disabled(!playable)
-            .h_full()
+            .h(px(54.))
             .w(px(40.))
             .flex_none()
             .rounded_l(px(0.))
@@ -612,7 +628,7 @@ impl Shell {
                         if launcher_known {
                             menu = menu.item(launch_item(
                                 "Skip the launcher".into(),
-                                "The game exe directly — nothing rewrites your settings",
+                                "The game exe directly, so nothing rewrites your settings",
                                 Icon::Bolt,
                                 LaunchMode::Direct,
                             ));
@@ -620,7 +636,7 @@ impl Shell {
                         if launcher_exists {
                             menu = menu.item(launch_item(
                                 "Through the game launcher".into(),
-                                "The game's own menu — it may re-apply its video settings",
+                                "The game's own menu. It may re-apply its video settings",
                                 Icon::Game,
                                 LaunchMode::Launcher,
                             ));
@@ -645,17 +661,37 @@ impl Shell {
             .when(playable, |d| {
                 d.bg(gpui::linear_gradient(
                     100.,
-                    gpui::linear_color_stop(theme::accent(), 0.),
-                    gpui::linear_color_stop(theme::accent_hi(), 1.),
+                    gpui::linear_color_stop(fill_from, 0.),
+                    gpui::linear_color_stop(fill_to, 1.),
                 ))
                 .border_1()
                 .border_color(theme::with_alpha(theme::accent_pressed(), 0.6))
                 .shadow(theme::shadow_card())
             })
             .when(!playable, |d| d.bg(theme::accent_disabled()))
+            .relative()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.play_hovered = *hovered;
+                cx.notify();
+            }))
             .child(main)
             .child(div().w(px(1.)).h(px(28.)).bg(ink(0.2)))
-            .child(chevron);
+            .child(chevron)
+            // While hovered, a light circles the button's edge: one lap every
+            // 2.4 s at a constant speed, so there's no restart to see.
+            .when(hovered && theme::motion(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(-1.))
+                        .left(px(-1.))
+                        .right(px(-1.))
+                        .bottom(px(-1.))
+                        .with_animation("play-orbit", Animation::new(Duration::from_millis(2400)).repeat(), move |d, t| {
+                            d.child(ui::orbit(gpui::white(), t, theme::RADIUS_LG))
+                        }),
+                )
+            });
 
         div()
             .w(px(PANE))

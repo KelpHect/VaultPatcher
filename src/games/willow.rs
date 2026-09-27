@@ -466,7 +466,7 @@ pub const RANGES: &[RangePair] = &[RangePair {
 
 pub const TWEAKS: &[Tweak] = &[
     // Simple-mode combined controls
-    custom("fps_target", "quick", "Framerate limit", "Cap the game at your monitor's refresh rate for smooth, even frame pacing — or remove the cap entirely.",
+    custom("fps_target", "quick", "Framerate limit", "Cap the game at your monitor's refresh rate for smooth, even frame pacing, or remove the cap entirely.",
         Control::Choice(FPS_TARGETS), read_fps_target, write_fps_target, C("60"), Impact::Medium, MENU),
 
     // Display
@@ -486,13 +486,13 @@ pub const TWEAKS: &[Tweak] = &[
         &[key(E, "WillowGame.WillowGameEngine", "bPauseLostFocusWindowed"), key(L, "WillowGame.WillowGameEngine", "bPauseLostFocusWindowed")], TF_UPPER, false, Impact::None, MENU),
 
     // Framerate
-    choice("fps_lock", "framerate", "Framerate limit", "The in-game limiter. \"Smoothed\" uses the min/max range below — set it to 141/142 (or your refresh − 1) for a custom cap.",
+    choice("fps_lock", "framerate", "Framerate limit", "The in-game limiter. \"Smoothed\" uses the min/max range below; set it to 141/142 (or your refresh − 1) for a custom cap.",
         &[key(E, SS, "FramerateLocking"), key(L, SS, "FramerateLocking")], FRAMERATE_LOCK, "0", Impact::Medium, MENU),
     toggle("smooth_fps", "framerate", "Frame smoothing", "Enables the smoothed range. Used when the limit is set to Smoothed.",
         &[key(E, ENGINE, "bSmoothFrameRate")], TF_UPPER, true, Impact::None, NONE),
     slider("smooth_min", "framerate", "Smoothed minimum", "Lower bound of the smoothed range.",
         &[key(E, ENGINE, "MinSmoothedFrameRate")], (10.0, 360.0, 1.0), 0, "fps", 22.0, Impact::None, NONE),
-    slider("smooth_max", "framerate", "Smoothed maximum", "Upper bound — effectively your FPS cap in Smoothed mode.",
+    slider("smooth_max", "framerate", "Smoothed maximum", "Upper bound: effectively your FPS cap in Smoothed mode.",
         &[key(E, ENGINE, "MaxSmoothedFrameRate")], (30.0, 400.0, 1.0), 0, "fps", 62.0, Impact::Medium, NONE),
     toggle("one_frame_lag", "framerate", "One frame thread lag", "Lets the render thread run a frame behind. Off lowers input latency at some FPS cost.",
         &[key(E, SS, "OneFrameThreadLag"), key(L, SS, "OneFrameThreadLag")], TF, true, Impact::Low, MENU),
@@ -544,7 +544,7 @@ pub const TWEAKS: &[Tweak] = &[
         &[key(E, "TextureStreaming", "PoolSize")], (100.0, 1500.0, 20.0), 0, "MB", 160.0, Impact::Medium, NONE),
     custom("no_texture_fade", "textures", "Disable texture fade-in", "Zeroes the four MipFade speeds so textures appear instantly instead of blending from blurry versions.",
         Control::Toggle, read_texture_fade, write_texture_fade, B(false), Impact::None, NONE),
-    toggle("only_stream_in", "textures", "Only stream in textures", "Never drops loaded mips, which fixes close-range blur — but can cause \"out of video memory\" crashes (fine with DXVK).",
+    toggle("only_stream_in", "textures", "Only stream in textures", "Never drops loaded mips, which fixes close-range blur, but can cause \"out of video memory\" crashes (fine with DXVK).",
         &[key(E, SS, "OnlyStreamInTextures")], TF, false, Impact::Medium, EXPERIMENTAL),
 
     // Outlines
@@ -616,7 +616,7 @@ pub const TWEAKS: &[Tweak] = &[
         &[key(I, "Engine.Console", "ConsoleKey")], CONSOLE_KEYS, "Undefine", Impact::None, NONE),
     choice("type_key", "input", "Quick-type console key", "Opens the one-line console prompt.",
         &[key(I, "Engine.Console", "TypeKey")], CONSOLE_KEYS, "Undefine", Impact::None, NONE),
-    custom("unbind_remaster", "input", "Remove Ctrl+Shift+R remaster toggle", "The UHD pack added a hidden Ctrl+Shift+R bind that swaps HD and original assets — easy to hit by accident.",
+    custom("unbind_remaster", "input", "Remove Ctrl+Shift+R remaster toggle", "The UHD pack added a hidden Ctrl+Shift+R bind that swaps HD and original assets, which is easy to hit by accident.",
         Control::Toggle, read_remaster_unbound, write_remaster_unbound, B(false), Impact::None, NONE),
     toggle("mouse_smoothing", "input", "Mouse smoothing (engine)", "Engine-level smoothing. The in-game option in profile.bin usually overrides this, so turn it off there too.",
         &[key(I, PLAYER_INPUT, "bEnableMouseSmoothing")], TF_LOWER, true, Impact::None, EXPERIMENTAL),
@@ -826,7 +826,7 @@ const BL2_GEARBOX_HOTFIXES: &str =
 /// balance, loot or difficulty is left out.
 const COMMUNITY_PATCH_SOURCES: &[TextSource] = &[
     TextSource {
-        title: "Unofficial Community Patch — fixes only",
+        title: "Unofficial Community Patch (fixes only)",
         credit: "Unofficial Community Patch by shadowevil and the Community Patch Team (55tumbl, Apocalyptech, FromDarkHell, LightChaosman, Our Lord And Savior Gabe Newell and many more).",
         url: concat!("https://raw.githubusercontent.com/BLCM/BLCMods/b512a9b13f94cc11ce7f0b03c7f5080d8612418c", "/Borderlands%202%20mods/Community%20Patch%20Team/Patch.txt"),
         include: &[

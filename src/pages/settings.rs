@@ -158,6 +158,17 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         ))
         .child(ui::divider())
         .child(setting_row(
+            "Search again",
+            "Look for every game's install and settings folders again: after installing or moving a game, or plugging in a drive.",
+            ui::button_if(!state.searching, "search-again", if state.searching { "Searching\u{2026}" } else { "Search again" }, Some(Icon::Search), Variant::Secondary)
+                .on_click({
+                    let ws = ws.clone();
+                    move |_, _, cx| ws.update(cx, |ws, cx| ws.search_again(cx))
+                })
+                .into_any_element(),
+        ))
+        .child(ui::divider())
+        .child(setting_row(
             "Auto-detect",
             "Forget custom folders and look in Steam, Epic and Documents\\My Games again.",
             ui::button("reset-paths", "Use auto-detect", Some(Icon::Refresh), Variant::Secondary)
@@ -203,7 +214,21 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             "Backups to keep",
             "Older automatic settings backups are pruned. Your original settings and exe/SDK backups are always kept.",
             keep_box.into_any_element(),
-        ));
+        ))
+        .child(ui::divider())
+        .child({
+            let dir = backup::data_dir();
+            setting_row(
+                "Where Vault Patcher keeps its data",
+                format!("Settings, backups, profiles and cached images: {}", dir.display()),
+                ui::button("open-data", "Open folder", Some(Icon::Folder), Variant::Secondary)
+                    .on_click(move |_, _, cx| {
+                        std::fs::create_dir_all(&dir).ok();
+                        open_folder(&dir, cx)
+                    })
+                    .into_any_element(),
+            )
+        });
 
     // ---- updates & diagnostics
     let app_update = state.updates.app.clone();
@@ -251,7 +276,6 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         }));
 
     // ---- about: a SettingsExpander
-    let data_dir = backup::data_dir();
     let about_open = state.setup_expanded.contains(ABOUT);
     let about_ws = ws.clone();
     let about = ui::panel()
@@ -304,13 +328,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .child(row(
                         "Icons and fonts",
                         "Icons are Segoe Fluent Icons from Windows. Where Segoe UI isn't installed, text falls back to the bundled Noto Sans (SIL Open Font License).",
-                    ))
-                    .child(ui::divider())
-                    .child(link_row("open-data", "Data folder", "Backups, profiles and settings Vault Patcher keeps on this PC.", Icon::Link, move |cx| {
-                        std::fs::create_dir_all(&data_dir).ok();
-                        open_folder(&data_dir, cx)
-                    })
-                    .pl(px(48.))),
+                    )),
             )
         });
 

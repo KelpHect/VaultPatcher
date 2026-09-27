@@ -72,7 +72,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         out.push(check(
             Level::Error,
             "Some settings files can't be read",
-            format!("{} — close the game or check antivirus/OneDrive.", unreadable.join(", ")),
+            format!("{}: close the game or check antivirus/OneDrive.", unreadable.join(", ")),
             None,
         ));
     } else {
@@ -89,7 +89,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         out.push(check(
             Level::Warn,
             "Settings files are read-only",
-            format!("{} — the in-game menu can't save changes.", read_only.join(", ")),
+            format!("{}: the in-game menu can't save changes.", read_only.join(", ")),
             Some(("Settings", PageKind::Settings)),
         ));
     }
@@ -160,7 +160,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
         ));
     }
 
-    // Something rewrote what Vault Patcher last saved — the game's launcher
+    // Something rewrote what Vault Patcher last saved: the game's launcher
     // keeping its own video settings, an in-game menu, "verify files"...
     // (Without the settings files every value would look changed; that has
     // its own check above.)

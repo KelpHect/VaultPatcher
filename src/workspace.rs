@@ -100,7 +100,7 @@ pub enum StepState {
 pub enum LaunchMode {
     /// The game exe with the user's configured launch options.
     Normal,
-    /// The game exe, forcing the skip-launcher switch for this run —
+    /// The game exe, forcing the skip-launcher switch for this run,
     /// so the launcher can't re-apply its copy of the video settings.
     Direct,
     /// The game's own launcher program (BL2/TPS's Launcher.exe).
@@ -383,9 +383,9 @@ impl GameState {
     /// the game or its launcher is open and would overwrite them.
     pub fn write_blocker(&self) -> Option<String> {
         if self.is_running_now() {
-            Some(format!("{} is running — close it first, or it will overwrite these settings when it exits", self.def.name))
+            Some(format!("{} is running. Close it first, or it will overwrite these settings when it exits", self.def.name))
         } else if self.launcher_running() {
-            Some(format!("The {} launcher is open — close it first, or it will put its own video settings back", self.def.short))
+            Some(format!("The {} launcher is open. Close it first, or it will put its own video settings back", self.def.short))
         } else {
             None
         }
@@ -462,6 +462,8 @@ pub struct Workspace {
     autoapply_generation: Vec<u64>,
     /// Game-running watch and background mode (see "game running" below).
     run_watch: RunWatch,
+    /// A "Search again" for the games is running.
+    pub searching: bool,
     /// The watch's timer loop; dropped (and stopped) with the workspace.
     _run_poll: gpui::Task<()>,
 }
@@ -504,6 +506,7 @@ impl Workspace {
             next_toast: 0,
             autoapply_generation: vec![0; games::all().len()],
             run_watch: RunWatch::default(),
+            searching: false,
             _run_poll: Self::spawn_run_poll(cx),
         };
         // Before reading anything: a capture cut short last time left its shot settings behind.
@@ -530,8 +533,8 @@ impl Workspace {
         ws
     }
 
-    /// Installs comparison images a game is missing — bundled sets are copied
-    /// out of the exe, anything else falls back to the published zip — then
+    /// Installs comparison images a game is missing: bundled sets are copied
+    /// out of the exe, anything else falls back to the published zip. Then
     /// makes the small preview copies. Silent if there's nothing to add.
     fn fetch_comparison_packs(&mut self, cx: &mut Context<Self>) {
         let all: Vec<&'static str> = self.games.iter().filter(|g| !g.def.comparisons.is_empty()).map(|g| g.def.id).collect();
@@ -662,6 +665,7 @@ impl Workspace {
             let loads = task.await;
             this.update(cx, |ws, cx| {
                 // A game refreshed meanwhile (a folder picked) is newer.
+                // (Startup only: [`Self::search_again`] takes everything.)
                 for (game, load) in ws.games.iter_mut().zip(loads).filter(|(g, _)| !g.loaded) {
                     game.take_load(load);
                 }
@@ -674,6 +678,38 @@ impl Workspace {
                     .map(|i| i.root.join(crate::sound::AUDIO_DIR))
                     .find(|d| d.join("ButtonClick.mp3").is_file());
                 crate::sound::init(audio_dir.as_deref(), ws.settings.sound_muted, ws.settings.music);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Looks for every game again (after installing one, moving it or
+    /// plugging in a drive), off the UI thread, then says what it found.
+    pub fn search_again(&mut self, cx: &mut Context<Self>) {
+        if self.searching {
+            return;
+        }
+        self.searching = true;
+        cx.notify();
+        let defs: Vec<&'static GameDef> = self.games.iter().map(|g| g.def).collect();
+        let settings = self.settings.clone();
+        let task = cx.background_executor().spawn(async move { defs.into_iter().map(|def| GameLoad::read(def, &settings)).collect::<Vec<_>>() });
+        cx.spawn(async move |this, cx| {
+            let loads = task.await;
+            this.update(cx, |ws, cx| {
+                ws.searching = false;
+                for (game, load) in ws.games.iter_mut().zip(loads) {
+                    game.take_load(load);
+                }
+                let found: Vec<&str> = ws.games.iter().filter(|g| g.install.is_some()).map(|g| g.def.short).collect();
+                let msg = match found.len() {
+                    0 => "No games found. Pick the install folder in App settings".to_string(),
+                    n if n == ws.games.len() => format!("Found all {n} games"),
+                    _ => format!("Found {}", found.join(", ")),
+                };
+                ws.toast(if found.is_empty() { ToastKind::Info } else { ToastKind::Success }, msg, cx);
                 cx.notify();
             })
             .ok();
@@ -771,7 +807,7 @@ impl Workspace {
         let count = self.game().pending.len();
         self.toast(
             ToastKind::Info,
-            format!("{} loaded — {count} change(s) waiting. Press Apply to write them.", preset.name),
+            format!("{} loaded: {count} change(s) waiting. Press Apply to write them.", preset.name),
             cx,
         );
     }
@@ -1040,7 +1076,7 @@ impl Workspace {
         let def = game.def;
         let Some(dir) = game.config_dir.clone().filter(|_| game.config_found()) else {
             return Err(anyhow!(
-                "config files not found — launch the game once or set the folder in App Settings"
+                "config files not found: launch the game once or set the folder in App Settings"
             ));
         };
         if let Some(reason) = game.write_blocker() {
@@ -1052,7 +1088,7 @@ impl Workspace {
             backup::create(def.id, backup::ORIGINAL_LABEL, &existing).context("saving your original settings")?;
         }
         // What every tweak reads before the edit, so afterwards we know
-        // which values this write actually changed — those are remembered
+        // which values this write actually changed, those are remembered
         // for "Re-apply".
         let before: Vec<Option<Value>> = def.visible_tweaks().map(|t| t.read(&config)).collect();
         let changes = |config: &ConfigSet| -> Vec<(&'static str, Option<Value>)> {
@@ -1086,7 +1122,7 @@ impl Workspace {
         game.config = ConfigSet::load(&dir, def.ini_files);
         game.invalidate_statuses();
         game.backups = backup::list(def.id);
-        // Remember what actually landed on disk — even when only some of
+        // Remember what actually landed on disk, even when only some of
         // the files could be written.
         let changed = changes(&game.config);
         let recorded = game.update_applied(|a| a.merge(&changed));
@@ -1329,9 +1365,9 @@ impl Workspace {
     /// downloads).
     fn job_blocker(&self) -> Option<&'static str> {
         if self.capture_running() {
-            Some("A comparison capture is running \u{2014} wait for it to finish")
+            Some("A comparison capture is running. Wait for it to finish")
         } else if self.setup_running() || self.busy.is_some() {
-            Some("Still working \u{2014} wait for it to finish")
+            Some("Still working. Wait for it to finish")
         } else {
             None
         }
@@ -1341,7 +1377,7 @@ impl Workspace {
     /// it would half-load a changing mod setup).
     fn mods_blocker(&self) -> Option<String> {
         self.job_blocker().map(str::to_string).or_else(|| {
-            self.game().is_running_now().then(|| format!("{} is running \u{2014} close it first", self.game().def.name))
+            self.game().is_running_now().then(|| format!("{} is running. Close it first", self.game().def.name))
         })
     }
 
@@ -1454,10 +1490,10 @@ impl Workspace {
             self.toast(
                 ToastKind::Info,
                 match goal {
-                    SetupGoal::Uninstall => "Nothing to restore — no Vault Patcher components are active.",
+                    SetupGoal::Uninstall => "Nothing to restore: no Vault Patcher components are active.",
                     SetupGoal::Install => "Everything selected is already installed.",
                     SetupGoal::Reapply => {
-                        "Nothing to re-apply — no settings or upgrades have been applied yet."
+                        "Nothing to re-apply: no settings or upgrades have been applied yet."
                     }
                 },
                 cx,
@@ -1529,7 +1565,7 @@ impl Workspace {
                 }
                 ws.refresh_game(game_index);
                 match (failed, goal) {
-                    (0, SetupGoal::Install) => ws.toast(ToastKind::Success, "All set — enjoy the upgraded game!", cx),
+                    (0, SetupGoal::Install) => ws.toast(ToastKind::Success, "All set. Enjoy the upgraded game!", cx),
                     (0, SetupGoal::Uninstall) => ws.toast(ToastKind::Success, "Restored to vanilla", cx),
                     (0, SetupGoal::Reapply) => {
                         let mut parts = Vec::new();
@@ -1550,7 +1586,7 @@ impl Workspace {
                     }
                     (n, _) => ws.toast(
                         ToastKind::Error,
-                        format!("{n} step(s) didn't finish — see the list for details"),
+                        format!("{n} step(s) didn't finish. See the list for details"),
                         cx,
                     ),
                 }
@@ -1585,7 +1621,7 @@ impl Workspace {
     /// then puts every remembered setting value and exe patch back.
     pub fn reapply_all(&mut self, cx: &mut Context<Self>) {
         if self.setup_running() {
-            self.toast(ToastKind::Info, "Already working — wait for it to finish", cx);
+            self.toast(ToastKind::Info, "Already working. Wait for it to finish", cx);
             return;
         }
         if let Some(reason) = self.game().write_blocker() {
@@ -1595,7 +1631,7 @@ impl Workspace {
         if !self.game().config_found() && self.game().install.is_none() {
             self.toast(
                 ToastKind::Error,
-                "Game install and settings folder not found — nothing to re-apply to",
+                "Game install and settings folder not found, so there's nothing to re-apply to",
                 cx,
             );
             return;
@@ -1627,7 +1663,7 @@ impl Workspace {
             a.sync_patches(&states);
         });
         match recorded {
-            Ok(()) => self.toast(ToastKind::Success, "Kept — Re-apply will leave these as they are", cx),
+            Ok(()) => self.toast(ToastKind::Success, "Kept. Re-apply will leave these as they are", cx),
             Err(e) => self.toast(ToastKind::Error, format!("{e:#}"), cx),
         }
     }
@@ -1685,7 +1721,7 @@ impl Workspace {
         let def = game.def;
         let path = game.exe_path().filter(|p| p.is_file()).context("game install not found")?;
         if game.is_running_now() {
-            return Err(anyhow!("{} is running — close it first", def.name));
+            return Err(anyhow!("{} is running. Close it first", def.name));
         }
         let mut bytes = patches::read_exe(&path).context("reading the exe")?;
         let mut patched = 0;
@@ -1721,7 +1757,7 @@ impl Workspace {
         let root = self.games[gi].install.as_ref().map(|i| i.root.clone());
         let touches_game = !matches!(component.kind, ComponentKind::LaunchArg(_));
         if touches_game && self.games[gi].is_running_now() {
-            return Err(anyhow!("{} is running — close it first", def.name));
+            return Err(anyhow!("{} is running. Close it first", def.name));
         }
         let need_root = || root.clone().context("game install not found");
         let (game_id, comp_id) = (def.id, component.id);
@@ -1738,8 +1774,8 @@ impl Workspace {
                         hook(config, mode);
                     }
                 })?;
-                // Remember every value of the bundle — not only the ones that
-                // changed — so Re-apply can put any of them back.
+                // Remember every value of the bundle, not only the ones that
+                // changed, so Re-apply can put any of them back.
                 let game = &mut self.games[gi];
                 let set: Vec<(&'static str, Option<Value>)> =
                     values.iter().filter_map(|(id, _)| def.tweak(id)).map(|t| (t.id, game.current(t))).collect();
@@ -1883,7 +1919,7 @@ impl Workspace {
         let result = (|| -> Result<()> {
             let game = self.game();
             if game.is_running_now() {
-                return Err(anyhow!("{} is running — close it first", game.def.name));
+                return Err(anyhow!("{} is running. Close it first", game.def.name));
             }
             let path = game.exe_path().context("game install not found")?;
             let patch = game
@@ -2137,7 +2173,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// How the Play button launches the current game — the mode last picked
+    /// How the Play button launches the current game, the mode last picked
     /// in its dropdown, falling back to `Normal` when it can't be used (no
     /// launcher for this game, or its exe isn't there).
     pub fn launch_mode(&self) -> LaunchMode {
@@ -2159,7 +2195,7 @@ impl Workspace {
     }
 
     /// Play with whatever way is selected in the dropdown (default: launch
-    /// options — the real game exe, never a Steam command).
+    /// options, the real game exe, never a Steam command).
     pub fn launch_default(&mut self, cx: &mut Context<Self>) {
         self.launch(self.launch_mode(), cx);
     }
@@ -2167,7 +2203,7 @@ impl Workspace {
     pub fn launch(&mut self, mode: LaunchMode, cx: &mut Context<Self>) {
         // The game would lock the files a setup run is writing.
         if self.job_blocker().is_some() {
-            self.toast(ToastKind::Info, "Still working — wait for it to finish, then play", cx);
+            self.toast(ToastKind::Info, "Still working. Wait for it to finish, then play", cx);
             return;
         }
         let def = self.game().def;
@@ -2251,7 +2287,7 @@ impl Workspace {
             RunChange::Stopped { .. } if self.capture_running() => cx.notify(),
             RunChange::Stopped { background } => {
                 let name = self.games[gi].def.name;
-                self.game_stopped(gi, background, format!("{name} closed \u{2014} you're back in control"), cx);
+                self.game_stopped(gi, background, format!("{name} closed. You're back in control"), cx);
             }
         }
     }
@@ -2349,7 +2385,7 @@ impl Workspace {
                 ws.busy = None;
                 ws.games[gi].note_running(still_running);
                 if still_running {
-                    ws.toast(ToastKind::Error, format!("Couldn't close {name} \u{2014} try quitting from the game"), cx);
+                    ws.toast(ToastKind::Error, format!("Couldn't close {name}. Try quitting from the game"), cx);
                     return;
                 }
                 let change = if gi == ws.active { ws.run_watch.observe(false) } else { RunChange::None };
@@ -2511,7 +2547,7 @@ impl RunWatch {
 }
 
 /// UI audio as (muted, music playing): silent in background mode, otherwise
-/// exactly what the user saved — never unconditionally unmuted.
+/// exactly what the user saved, never unconditionally unmuted.
 fn run_audio(background: bool, settings: &AppSettings) -> (bool, bool) {
     if background {
         (true, false)
@@ -2545,7 +2581,7 @@ enum SnapshotPlan {
 
 /// A burst of Quick Settings saves shares one backup (`recent`, the newest
 /// one, if it has `label` and is under five minutes old), but every file the
-/// burst touches must be in it — a later edit to another file adds that file.
+/// burst touches must be in it, a later edit to another file adds that file.
 fn snapshot_plan(recent: Option<&Backup>, label: &str, dirty: &[PathBuf], now: chrono::NaiveDateTime) -> SnapshotPlan {
     let fresh = recent.filter(|b| {
         b.label == label

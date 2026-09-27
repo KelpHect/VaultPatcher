@@ -937,6 +937,65 @@ pub fn stripes(color: gpui::Hsla, shift: f32) -> impl IntoElement {
     .size_full()
 }
 
+/// A comet of light on a rounded rectangle's outline, its head at `t`
+/// (0..1) of the way round clockwise from the top-left. The outline is a
+/// closed loop, so a repeating animation of `t` circles without a seam.
+pub fn orbit(color: gpui::Hsla, t: f32, radius: f32) -> impl IntoElement {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    canvas(|_, _, _| {}, move |bounds, _, window, _| {
+        // Centred on the 1px border.
+        let (x0, y0) = (f32::from(bounds.origin.x) + 0.5, f32::from(bounds.origin.y) + 0.5);
+        let (w, h) = (f32::from(bounds.size.width) - 1., f32::from(bounds.size.height) - 1.);
+        let r = radius.min(w / 2.).min(h / 2.);
+        let mut pts: Vec<(f32, f32)> = Vec::with_capacity(48);
+        let corner = |pts: &mut Vec<(f32, f32)>, cx: f32, cy: f32, from: f32| {
+            for i in 0..=8 {
+                let a = from + FRAC_PI_2 * i as f32 / 8.;
+                pts.push((cx + r * a.cos(), cy + r * a.sin()));
+            }
+        };
+        corner(&mut pts, x0 + w - r, y0 + r, -FRAC_PI_2);
+        corner(&mut pts, x0 + w - r, y0 + h - r, 0.);
+        corner(&mut pts, x0 + r, y0 + h - r, FRAC_PI_2);
+        corner(&mut pts, x0 + r, y0 + r, PI);
+        pts.push(pts[0]);
+        let mut along = vec![0f32];
+        for i in 1..pts.len() {
+            let (a, b) = (pts[i - 1], pts[i]);
+            along.push(along[i - 1] + ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+        }
+        let total = *along.last().unwrap_or(&1.);
+        let at = |s: f32| {
+            let s = s.rem_euclid(total);
+            let i = along.partition_point(|&d| d <= s).clamp(1, pts.len() - 1);
+            let (a, b) = (pts[i - 1], pts[i]);
+            let f = (s - along[i - 1]) / (along[i] - along[i - 1]).max(0.001);
+            point(px(a.0 + (b.0 - a.0) * f), px(a.1 + (b.1 - a.1) * f))
+        };
+        // The tail fades out over a third of the way round.
+        const PIECES: usize = 24;
+        let (head, tail) = (t * total, total * 0.3);
+        // A soft wide glow under a thin bright core.
+        for (width, strength) in [(6., 0.3), (2., 1.)] {
+            for k in 0..PIECES {
+                let s1 = head - tail * k as f32 / PIECES as f32;
+                let s0 = head - tail * (k + 1) as f32 / PIECES as f32;
+                let mut path = PathBuilder::stroke(px(width));
+                path.move_to(at(s0));
+                for j in 1..=4 {
+                    path.line_to(at(s0 + (s1 - s0) * j as f32 / 4.));
+                }
+                let mut c = color;
+                c.a *= strength * (1. - k as f32 / PIECES as f32).powi(2);
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, c);
+                }
+            }
+        }
+    })
+    .size_full()
+}
+
 /// One frame of the indeterminate ProgressRing at cycle position `t`
 /// (0..1), for views that drive it on their own timer.
 pub fn progress_ring_frame(size: f32, t: f32) -> gpui::Div {
