@@ -48,6 +48,15 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
   when focus arrived by keyboard (`Window::is_focus_visible`; set by Tab
   navigation, cleared by any mouse press), and `Styled::outline` draws a ring
   outside an element without affecting layout, with an optional inner ring.
+- **Inert elements**: `InteractiveElement::inert(bool)` for disabled
+  controls: hover/pressed styles, pointer/key/drag handlers and the Tab stop
+  are dropped; tooltips still show so they can say why.
+- **Text truncation** re-measures at the final width: the layout cache now
+  keys on the truncation width too, so `truncate()` ends with an ellipsis
+  instead of clipping mid-glyph after a min-content pass.
+- **Image caches free their textures**: a `RetainAllImageCache` released
+  mid-draw (the usual case) defers dropping its images until every window is
+  back in `App::windows`, so the atlas textures are actually removed.
 - Fixed two float-literal inference warnings in `taffy.rs`.
 
 ## gpui-component

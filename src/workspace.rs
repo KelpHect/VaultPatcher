@@ -1155,6 +1155,18 @@ impl Workspace {
     pub fn close_preview(&mut self, cx: &mut Context<Self>) {
         self.preview = None;
         cx.notify();
+        // The viewer's full-size images are freed when gpui drops its element
+        // state, a frame or two after it closes; make sure those frames come
+        // even if nothing else redraws.
+        cx.spawn(async move |this, cx| {
+            for _ in 0..2 {
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Save files the capture tool can load into, newest first.

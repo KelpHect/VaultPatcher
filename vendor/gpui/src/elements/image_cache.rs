@@ -241,11 +241,19 @@ impl RetainAllImageCache {
     pub fn new(cx: &mut App) -> Entity<Self> {
         let e = cx.new(|_cx| RetainAllImageCache(HashMap::new()));
         cx.observe_release(&e, |image_cache, cx| {
-            for (_, mut item) in std::mem::replace(&mut image_cache.0, HashMap::new()) {
-                if let Some(Ok(image)) = item.get() {
+            let images: Vec<_> = std::mem::replace(&mut image_cache.0, HashMap::new())
+                .into_iter()
+                .filter_map(|(_, mut item)| item.get().and_then(Result::ok))
+                .collect();
+            // The cache is usually released while a window is drawing, when
+            // that window is checked out of `App::windows`, so dropping the
+            // images right away would skip its atlas and leak the textures.
+            // Defer until every window is back.
+            cx.defer(move |cx| {
+                for image in images {
                     cx.drop_image(image, None);
                 }
-            }
+            });
         })
         .detach();
         e

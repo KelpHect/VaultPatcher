@@ -327,6 +327,9 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
     let close_btn_ws = ws.clone();
     Some(
         div()
+            // Full-size shots live in a cache owned by the viewer, freed when
+            // it closes (the app-wide one keeps images for the whole run).
+            .image_cache(gpui::retain_all("lightbox-images"))
             .id("lightbox")
             .absolute()
             .inset_0()
