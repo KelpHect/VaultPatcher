@@ -117,7 +117,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let install_dir = game.install.as_ref().map(|i| i.root.clone());
     let stat = |id: &'static str, icon: Icon, value: String, label: &'static str, page: PageKind| {
         let ws = ws.clone();
-        ui::focusable(div().id(id))
+        ui::focusable_row(div().id(id))
             .flex()
             .items_center()
             .gap(px(12.))

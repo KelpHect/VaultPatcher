@@ -268,7 +268,7 @@ fn row(
         );
     // The row is a CheckBox when it can be toggled: a Tab stop with hover.
     let header = if can_toggle {
-        ui::focusable(header)
+        ui::focusable_row(header)
             .cursor_pointer()
             .hover(|s| s.bg(theme::panel_hi()))
             .active(|s| s.bg(theme::panel_pressed()))

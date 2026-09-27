@@ -27,7 +27,7 @@ fn link_row(
     glyph: Icon,
     on_click: impl Fn(&mut App) + 'static,
 ) -> Stateful<Div> {
-    ui::focusable(div().id(id))
+    ui::focusable_row(div().id(id))
         .flex()
         .items_center()
         .gap(px(16.))
@@ -258,7 +258,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .flex()
         .flex_col()
         .child(
-            ui::focusable(div().id("about-header"))
+            ui::focusable_row(div().id("about-header"))
                 .flex()
                 .items_center()
                 .gap(px(16.))

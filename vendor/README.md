@@ -64,5 +64,6 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
 - `StyledExt::popover_style` (menus, dropdowns, popovers) and tooltips are
   acrylic: a 30px backdrop blur under the theme's (translucent) `popover`
   color, with `radius_lg` overlay corners on flyouts.
+- Medium inputs are 32px tall (WinUI TextBox), whatever the rem size.
 - Popup menus open with a flyout entrance (fade over 83 ms while settling
   from 96% size), skipped under `gpui::reduce_motion()`.

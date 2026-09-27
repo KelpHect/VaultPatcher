@@ -329,6 +329,13 @@ pub fn focusable(control: Stateful<gpui::Div>) -> Stateful<gpui::Div> {
     control.tab_index(0).focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(1.), Some(theme::focus_stroke_inner().into())))
 }
 
+/// [`focusable`] for full-width rows inside a card: the focus ring is drawn
+/// just inside the row (like ListViewItem), so the card's rounded clip
+/// doesn't cut it off.
+pub fn focusable_row(row: Stateful<gpui::Div>) -> Stateful<gpui::Div> {
+    row.tab_index(0).focus_visible(|s| s.outline(px(2.), theme::focus_stroke(), px(-3.), None))
+}
+
 /// Attaches a plain-text tooltip.
 pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
     let text: SharedString = text.into();
