@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Bounds, Entity, FontWeight, IntoElement, ObjectFit, ParentElement, Pixels, SharedString, Styled,
-    StyledImage, Window, div, img, prelude::*, px, relative,
+    StyledImage, Window, div, img, prelude::*, px,
 };
 
-use super::{missing_notice, page_header};
+use super::{breadcrumb_header, missing_notice};
 use crate::compare;
 use crate::games::willow;
 use crate::theme::{self, Icon};
@@ -49,11 +49,12 @@ fn split_frame(
             .when(right, |d| d.right(px(8.)))
             .when(!right, |d| d.left(px(8.)))
             .px(px(8.))
-            .py(px(3.))
+            .py(px(2.))
             .rounded(px(theme::RADIUS))
             .bg(theme::with_alpha(theme::bg_deep(), 0.82))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_size(px(if small { 11.5 } else { 13. }))
+            .text_size(px(12.))
+            .line_height(px(16.))
             .text_color(theme::text())
             .child(text)
     };
@@ -150,44 +151,48 @@ pub fn inline_viewer(tweak: &'static Tweak, ws: &Entity<Workspace>, width: f32, 
             split,
             move |s, cx| split_ws.update(cx, |ws, cx| ws.set_inline(tweak.id, Some(right), Some(s), cx)),
         ));
-        let mut thumbs = div().flex().gap(px(6.)).overflow_hidden();
-        let thumb_w = ((width - 6. * (images.len() as f32 - 1.)) / images.len() as f32 - 0.5).min(96.);
+        let mut thumbs = div().flex().gap(px(4.)).overflow_hidden();
+        let thumb_w = ((width - 4. * (images.len() as f32 - 1.)) / images.len() as f32 - 0.5).min(96.);
         for (i, (label, path)) in images.iter().enumerate() {
             let ws = ws.clone();
             let is_right = i == right;
             let is_current = i == left;
-            thumbs = thumbs.child(
-                div()
-                    .id(SharedString::from(format!("thumb-{}-{i}", tweak.id)))
-                    .w(px(thumb_w))
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .cursor_pointer()
-                    .tooltip(ui::tip(if is_current { format!("{label} (current)") } else { format!("Compare with {label}") }))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(thumb_w * 9. / 16.))
-                            .rounded(px(theme::RADIUS))
-                            .overflow_hidden()
-                            .border_2()
-                            .border_color(if is_right {
-                                theme::accent()
-                            } else if is_current {
-                                theme::text_muted()
-                            } else {
-                                gpui::transparent_black().into()
-                            })
-                            .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover)),
-                    )
-                    .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(label.clone()))
-                    .on_click(move |_, _, cx| {
-                        if !is_current {
-                            ws.update(cx, |ws, cx| ws.set_inline(tweak.id, Some(i), None, cx))
-                        }
-                    }),
-            );
+            // Only the right-hand pick gets the accent border; the current
+            // option is marked by its label ("Now: …" on the frame too).
+            let thumb = div()
+                .id(SharedString::from(format!("thumb-{}-{i}", tweak.id)))
+                .w(px(thumb_w))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(theme::RADIUS))
+                .tooltip(ui::tip(if is_current { format!("{label} (current)") } else { format!("Compare with {label}") }))
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(thumb_w * 9. / 16.))
+                        .rounded(px(theme::RADIUS))
+                        .overflow_hidden()
+                        .border_2()
+                        .border_color(if is_right { theme::accent().into() } else { gpui::transparent_black() })
+                        .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover)),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_ellipsis().line_clamp(1)
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(if is_current { theme::text() } else { theme::text_muted() })
+                        .when(is_current, |d| d.font_weight(FontWeight::SEMIBOLD))
+                        .child(label.clone()),
+                );
+            thumbs = thumbs.child(if is_current {
+                thumb
+            } else {
+                ui::focusable(thumb).cursor_pointer().on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.set_inline(tweak.id, Some(i), None, cx)))
+            });
         }
         let open_ws = ws.clone();
         col = col.child(thumbs).child(
@@ -197,7 +202,6 @@ pub fn inline_viewer(tweak: &'static Tweak, ws: &Entity<Workspace>, width: f32, 
                 .gap(px(8.))
                 .child(
                     ui::button(SharedString::from(format!("big-{}", tweak.id)), "Full screen", Some(Icon::Expand), Variant::Ghost)
-                        .h(px(28.))
                         .on_click(move |_, _, cx| open_ws.update(cx, |ws, cx| ws.open_preview(tweak.id, right, cx))),
                 )
                 .child(div().flex_1())
@@ -209,18 +213,22 @@ pub fn inline_viewer(tweak: &'static Tweak, ws: &Entity<Workspace>, width: f32, 
     Some(col.into_any_element())
 }
 
+/// HyperlinkButton to Nvidia's comparison page.
 fn nvidia_link(tweak: &Tweak, url: String) -> impl IntoElement {
-    div()
-        .id(SharedString::from(format!("nv-{}", tweak.id)))
+    ui::focusable(div().id(SharedString::from(format!("nv-{}", tweak.id))))
         .flex()
         .items_center()
-        .gap(px(6.))
-        .text_size(px(12.))
-        .text_color(theme::echo())
+        .gap(px(8.))
+        .h(px(32.))
+        .px(px(8.))
+        .rounded(px(theme::RADIUS))
+        .text_size(px(14.))
+        .text_color(theme::accent_text())
         .cursor_pointer()
-        .hover(|s| s.text_color(theme::text()))
+        .hover(|s| s.bg(theme::panel_hi()))
+        .active(|s| s.bg(theme::panel_pressed()))
         .tooltip(ui::tip("Nvidia's interactive comparison, in your browser"))
-        .child(ui::icon(Icon::Link).size(px(13.)).text_color(theme::echo()))
+        .child(ui::icon(Icon::Link).size(px(12.)).text_color(theme::accent_text()))
         .child("Nvidia comparison")
         .on_click(move |_, _, cx| cx.open_url(&url))
 }
@@ -241,8 +249,10 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
 
     // Fit a 16:9 frame into the window, leaving room for the controls.
     let viewport = window.viewport_size();
-    let max_w = f32::from(viewport.width) * 0.88;
-    let max_h = f32::from(viewport.height) - 230.;
+    // (The dialog surface adds 24px padding on each side; keep it clear of
+    // the 48px title bar too.)
+    let max_w = f32::from(viewport.width) * 0.88 - 48.;
+    let max_h = f32::from(viewport.height) - 230. - 48. - 48.;
     let frame_w = max_w.min(max_h * 16. / 9.).max(320.);
     let frame_h = frame_w * 9. / 16.;
     let split_ws = ws.clone();
@@ -261,8 +271,16 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
             .flex()
             .items_center()
             .flex_wrap()
-            .gap(px(6.))
-            .child(div().w(px(40.)).text_size(px(12.)).text_color(theme::text_muted()).child(if side_right { "Right" } else { "Left" }));
+            .gap(px(4.))
+            .child(
+                div()
+                    .w(px(48.))
+                    .flex_none()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
+                    .text_color(theme::text_muted())
+                    .child(if side_right { "Right" } else { "Left" }),
+            );
         for (i, (label, _)) in images.iter().enumerate() {
             let ws = ws.clone();
             let selected = if side_right { preview.right == i } else { preview.left == i };
@@ -313,43 +331,59 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
             .absolute()
             .inset_0()
             .occlude()
-            .bg(theme::with_alpha(theme::bg_deep(), 0.96))
+            // Smoke over the app, and the viewer on an opaque dialog surface.
+            .bg(theme::smoke())
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(12.))
             .p(px(20.))
             .on_click(move |_, _, cx| close_ws.update(cx, |ws, cx| ws.close_preview(cx)))
             .child(
                 div()
-                    .w(px(frame_w))
+                    .id("lightbox-dialog")
                     .flex()
-                    .items_center()
-                    .child(div().flex_1().child(ui::display(tweak.label, 20.)))
-                    .child(
-                        ui::icon_button("lightbox-close", Icon::Close, theme::text_muted())
-                            .tooltip(ui::tip("Close (Esc)"))
-                            .on_click(move |_, _, cx| close_btn_ws.update(cx, |ws, cx| ws.close_preview(cx))),
-                    ),
-            )
-            .child(frame)
-            .child(
-                div()
-                    .id("lightbox-controls")
-                    .w(px(frame_w))
-                    .flex()
-                    .items_start()
-                    .gap(px(16.))
+                    .flex_col()
+                    .gap(px(12.))
+                    .p(px(24.))
+                    .rounded(px(theme::RADIUS_LG))
+                    .bg(theme::dialog())
+                    .border_1()
+                    .border_color(theme::flyout_stroke())
+                    .shadow(theme::shadow_dialog())
                     .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(div().flex_1().flex().flex_col().gap(px(6.)).child(side(false)).child(side(true)))
-                    .child(use_row),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(theme::text_muted())
-                    .child("Drag across the image to compare · ← → switch the right side · Esc closes"),
+                    .child(
+                        div()
+                            .w(px(frame_w))
+                            .flex()
+                            .items_center()
+                            .child(div().flex_1().min_w_0().child(ui::display(tweak.label, 20.)))
+                            .child(
+                                ui::icon_button("lightbox-close", Icon::Close, theme::text_muted())
+                                    .tooltip(ui::tip("Close (Esc)"))
+                                    .on_click(move |_, _, cx| close_btn_ws.update(cx, |ws, cx| ws.close_preview(cx))),
+                            ),
+                    )
+                    .child(frame)
+                    .child(
+                        div()
+                            .id("lightbox-controls")
+                            .w(px(frame_w))
+                            .flex()
+                            .items_start()
+                            .gap(px(16.))
+                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(8.)).child(side(false)).child(side(true)))
+                            .child(use_row),
+                    )
+                    .child(
+                        div()
+                            .w(px(frame_w))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(theme::text_muted())
+                            .child("Drag across the image to compare · ← → switch the right side · Esc closes"),
+                    ),
             )
             .into_any_element(),
     )
@@ -360,10 +394,14 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
     let state = ws.read(cx);
     let game = state.game();
     let def = game.def;
-    let mut page = div().flex().flex_col().gap(px(20.)).child(page_header(
-        "Comparison Capture",
+    // Reached from App settings, which has the nav selection: a breadcrumb
+    // leads back.
+    let back_ws = ws.clone();
+    let mut page = div().flex().flex_col().gap(px(20.)).child(breadcrumb_header(
+        "App settings",
+        move |cx| back_ws.update(cx, |ws, cx| ws.navigate(crate::games::PageKind::Settings, cx)),
+        "Comparison capture",
         "Screenshots every option of the listed settings so the settings pages can show what each looks like. Your settings are backed up first and restored when it finishes.",
-        vec![],
     ));
     if game.install.is_none() {
         return page.child(missing_notice("Game install not found", "Capturing runs the game.", ws)).into_any_element();
@@ -375,7 +413,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
     let minutes = (total_shots as u32 * (state.capture_settle + 30)).div_ceil(60);
 
     page = page.child(
-        ui::panel().p(px(16.)).flex().flex_col().gap(px(6.))
+        ui::panel().p(px(16.)).flex().flex_col().gap(px(8.))
             .child(ui::section_title("How it works", None))
             .child(ui::body(format!("For each of the {total_shots} shots, Vault Patcher writes that setting and launches the game straight into your chosen save (via the Quick Startup mod). A small helper mod hides the HUD and weapon, the window is captured, and the game quits. Your settings and game folder are restored afterwards.")))
             .child(ui::body(format!("Takes about {minutes} minutes and the game takes over the screen. Save somewhere scenic first; every shot is taken where the save loads."))),
@@ -383,7 +421,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
 
     let saves = state.capture_saves();
     let chosen = state.capture_save.clone().or_else(|| saves.first().cloned());
-    let mut save_row = div().flex().flex_wrap().gap(px(6.));
+    let mut save_row = div().flex().flex_wrap().gap(px(8.));
     for s in saves.iter().take(8) {
         let ws = ws.clone();
         let name = s.clone();
@@ -397,9 +435,14 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
         );
     }
     if saves.is_empty() {
-        save_row = save_row.child(ui::body("No save files yet. Play the game once and save somewhere scenic first."));
+        save_row = save_row.child(ui::body("None found"));
+        page = page.child(ui::info_bar(
+            ui::Severity::Warning,
+            "No save files yet",
+            "Capturing loads straight into a save. Play the game once and save somewhere scenic first.",
+        ));
     }
-    let mut settle_row = div().flex().gap(px(6.));
+    let mut settle_row = div().flex().gap(px(8.));
     for secs in [15u32, 25, 40] {
         let ws = ws.clone();
         settle_row = settle_row.child(
@@ -428,7 +471,7 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
     let no_saves = saves.is_empty();
     let start_ws = ws.clone();
     let cancel_ws = ws.clone();
-    let mut run = ui::panel().p(px(16.)).flex().flex_col().gap(px(10.)).child(
+    let mut run = ui::panel().p(px(16.)).flex().flex_col().gap(px(12.)).child(
         div()
             .flex()
             .items_center()
@@ -439,13 +482,14 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
                     .on_click(move |_, _, cx| cancel_ws.update(cx, |ws, cx| ws.cancel_capture(cx)))
                     .into_any_element()
             } else {
-                ui::button(
+                ui::button_if(
+                    !no_saves,
                     "capture-start",
                     if have >= total_shots { "Recapture" } else { "Start capture" },
                     Some(Icon::Camera),
                     if have >= total_shots { Variant::Secondary } else { Variant::Primary },
                 )
-                .when(no_saves, |b| b.opacity(0.4))
+                .when(no_saves, |b| b.tooltip(ui::tip("Needs a save file: play the game once and save first")))
                 .on_click(move |_, _, cx| {
                     if !no_saves {
                         start_ws.update(cx, |ws, cx| ws.start_capture(cx))
@@ -457,13 +501,13 @@ pub fn capture_page(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) 
     if let Some(progress) = state.capture.as_ref().and_then(|p| p.lock().ok().map(|p| p.clone())) {
         let fraction = if progress.total == 0 { 0. } else { progress.done as f32 / progress.total as f32 };
         run = run
-            .child(div().h(px(4.)).w_full().rounded_full().bg(theme::panel_lo()).child(div().h_full().rounded_full().w(relative(fraction)).bg(theme::accent())))
-            .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(if progress.finished {
+            .child(ui::progress_bar("capture-progress", Some(fraction), theme::accent()))
+            .child(ui::caption(if progress.finished {
                 "Finished. Settings restored.".to_string()
             } else {
                 format!("Shot {} of {}: {}", progress.done + 1, progress.total, progress.current)
             }))
-            .children(progress.log.iter().rev().take(8).map(|l| div().text_size(px(12.)).text_color(theme::text_muted()).child(l.clone())));
+            .children(progress.log.iter().rev().take(8).map(|l| ui::caption(l.clone())));
     }
     page.child(run).into_any_element()
 }

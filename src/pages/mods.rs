@@ -1,12 +1,11 @@
 //! Mod manager: the Python SDK (install/update/remove) and installed mods.
 //! Files can also be dropped anywhere on the window.
 
-use gpui::{AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
-use gpui_component::Sizable as _;
+use gpui::{AnyElement, App, Entity, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 
-use super::{confirm, missing_notice, open_folder, page_header, pick_paths};
+use super::{caption_style, clipped_with_tip, confirm, missing_notice, open_folder, page_header, pick_paths};
 use crate::mods::{ModKind, SdkStatus};
 use crate::theme::{self, Icon, Rarity};
 use crate::ui::{self, Variant};
@@ -23,7 +22,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         return div()
             .flex()
             .flex_col()
-            .gap(px(18.))
+            .gap(px(20.))
             .child(page_header("Mods", "SDK mods and text mods for this game.", vec![]))
             .child(missing_notice("Game install not found", "Mods are installed into the game folder, so Vault Patcher needs to know where it is.", ws))
             .into_any_element();
@@ -39,13 +38,28 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .into_any_element();
     let sdk_dir = install.root.join(support.sdk_mods_dir);
     let text_dir = install.root.join(support.text_mods_dir);
-    let open_sdk = ui::button("mods-open-sdk", "sdk_mods", Some(Icon::Folder), Variant::Ghost)
-        .tooltip(ui::tip("Open the SDK mods folder"))
-        .on_click(move |_, _, cx| open_folder(&sdk_dir, cx))
-        .into_any_element();
-    let open_text = ui::button("mods-open-text", "Binaries", Some(Icon::Folder), Variant::Ghost)
-        .tooltip(ui::tip("Open the text mods folder"))
-        .on_click(move |_, _, cx| open_folder(&text_dir, cx))
+    // One DropDownButton for both folders.
+    let open_folders = Button::new("mods-open")
+        .ghost()
+        .h(px(32.))
+        .px(px(12.))
+        .tooltip("Open a mods folder in Explorer")
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(14.))
+                .text_color(theme::text())
+                .child(ui::icon(Icon::Folder).text_color(theme::text()))
+                .child("Open folder")
+                .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(theme::text_muted())),
+        )
+        .dropdown_menu(move |menu, _, _| {
+            let (sdk_dir, text_dir) = (sdk_dir.clone(), text_dir.clone());
+            menu.item(PopupMenuItem::new("SDK mods folder").on_click(move |_, _, cx| open_folder(&sdk_dir, cx)))
+                .item(PopupMenuItem::new("Text mods folder").on_click(move |_, _, cx| open_folder(&text_dir, cx)))
+        })
         .into_any_element();
 
     // ---- SDK
@@ -72,7 +86,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         div()
             .flex()
             .items_center()
-            .gap(px(12.))
+            .gap(px(16.))
+            .min_h(px(68.))
             .px(px(16.))
             .py(px(12.))
             .child(ui::icon(Icon::Package).size(px(20.)).text_color(status_color))
@@ -82,14 +97,14 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().flex().items_center().gap(px(8.)).child(ui::title(support.sdk_name)).child(ui::badge(status_text, status_color)))
-                    .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(
-                        "Adds a MODS menu in-game and runs Python mods. Needs the Visual C++ runtime. Text mods need Text Mod Loader (part of One-Click Setup).",
+                    .child(div().flex().flex_wrap().items_center().gap(px(8.)).child(ui::title(support.sdk_name)).child(ui::badge(status_text, status_color)))
+                    .child(ui::caption(
+                        "Adds a MODS menu in-game and runs Python mods. Needs the Visual C++ runtime. Text mods need Text Mod Loader (part of One-click setup).",
                     )),
             )
             .child(
-                ui::button("sdk-install", primary_label, Some(Icon::Download), if update.is_some() || !installed { Variant::Primary } else { Variant::Secondary })
-                    .when(busy.is_some(), |d| d.opacity(0.5))
+                ui::button_if(busy.is_none(), "sdk-install", primary_label, Some(Icon::Download), if update.is_some() || !installed { Variant::Primary } else { Variant::Secondary })
+                    .when(busy.is_some(), |d| d.tooltip(ui::tip("Wait for the current task to finish")))
                     .on_click(move |_, _, cx| {
                         install_ws.update(cx, |ws, cx| {
                             if ws.busy.is_none() {
@@ -118,28 +133,44 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 }))
             }),
     );
-    if matches!(game.sdk, SdkStatus::Legacy) {
+    let legacy = matches!(game.sdk, SdkStatus::Legacy).then(|| {
+        ui::info_bar(
+            ui::Severity::Warning,
+            "The old PythonSDK is installed",
+            "It uses the Mods folder and doesn't run current mods. Installing the new SDK migrates compatible mods automatically.",
+        )
+    });
+    if let Some(b) = busy {
         sdk = sdk.child(ui::divider()).child(
-            div().px(px(16.)).py(px(8.)).child(ui::body("The old PythonSDK (Mods folder) is installed. Installing the new SDK migrates compatible mods automatically.").text_color(theme::warning())),
+            div()
+                .px(px(16.))
+                .py(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(ui::caption(b))
+                .child(ui::progress_bar("sdk-busy", None, theme::accent())),
         );
     }
-    if let Some(b) = busy {
-        sdk = sdk.child(ui::divider()).child(div().px(px(16.)).py(px(8.)).text_size(px(12.)).text_color(theme::accent_text()).child(b));
-    }
-    let mut links = div().flex().flex_wrap().gap(px(12.));
+    // HyperlinkButtons.
+    let mut links = div().flex().flex_wrap().gap(px(4.));
     for (i, (text, url)) in support.links.iter().enumerate() {
         let url = *url;
         links = links.child(
-            div()
-                .id(SharedString::from(format!("link-{i}")))
+            ui::focusable(div().id(SharedString::from(format!("link-{i}"))))
                 .flex()
                 .items_center()
-                .gap(px(4.))
-                .text_size(px(12.))
-                .text_color(theme::echo())
+                .gap(px(8.))
+                .h(px(32.))
+                .px(px(8.))
+                .rounded(px(theme::RADIUS))
+                .text_size(px(14.))
+                .text_color(theme::accent_text())
                 .cursor_pointer()
-                .hover(|s| s.text_color(theme::text()))
-                .child(ui::icon(Icon::Link).size(px(12.)).text_color(theme::echo()))
+                .hover(|s| s.bg(theme::panel_hi()))
+                .active(|s| s.bg(theme::panel_pressed()))
+                .tooltip(ui::tip(url))
+                .child(ui::icon(Icon::Link).size(px(12.)).text_color(theme::accent_text()))
                 .child(*text)
                 .on_click(move |_, _, cx| cx.open_url(url)),
         );
@@ -153,25 +184,36 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             div()
                 .flex()
                 .items_center()
-                .gap(px(10.))
+                .gap(px(12.))
+                .min_h(px(48.))
                 .px(px(16.))
-                .py(px(10.))
-                .child(ui::icon(Icon::Lock).size(px(15.)).text_color(theme::text_dim()))
+                .py(px(8.))
+                .child(ui::icon(Icon::Lock).text_color(theme::text_muted()))
                 .child(ui::title(format!("SDK core modules ({core})")))
-                .child(div().text_size(px(12.)).text_color(theme::text_muted()).child("Part of the mod loader; always on.")),
+                .child(ui::caption("Part of the mod loader; always on.")),
         );
     }
     let user_mods: Vec<_> = game.mods.iter().filter(|m| !m.core).collect();
     if user_mods.is_empty() {
+        // A drop zone (the whole window takes drops; this one lights up).
         list = list.when(core > 0, |d| d.child(ui::divider())).child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(6.))
-                .py(px(28.))
-                .child(ui::icon(Icon::Upload).size(px(24.)).text_color(theme::text_dim()))
-                .child(ui::body("No mods of your own yet. Drop .sdkmod, .zip, .blcm or .txt files here, or use Add mods…")),
+            div().p(px(8.)).child(
+                div()
+                    .id("mods-drop")
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(8.))
+                    .py(px(24.))
+                    .px(px(16.))
+                    .rounded(px(theme::RADIUS))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(theme::ink())
+                    .drag_over::<ExternalPaths>(|s, _, _, _| s.border_color(theme::accent()))
+                    .child(ui::icon(Icon::Upload).size(px(32.)).text_color(theme::text_muted()))
+                    .child(ui::body("No mods of your own yet. Drop .sdkmod, .zip, .blcm or .txt files here, or use Add mods…").text_center()),
+            ),
         );
     }
     for (i, m) in user_mods.into_iter().enumerate() {
@@ -186,50 +228,62 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         let toggle_ws = ws.clone();
         let toggle_path = m.path.clone();
         let (menu_ws, menu_path, menu_name) = (ws.clone(), m.path.clone(), m.name.clone());
+        let path_text = m.path.display().to_string();
+        let description = m.description.clone().unwrap_or_else(|| path_text.clone());
+        let description_tip = match &m.description {
+            Some(d) => format!("{d}\n{path_text}"),
+            None => path_text,
+        };
         list = list.child(
             div()
                 .id(SharedString::from(format!("mod-row-{i}")))
                 .flex()
                 .items_center()
                 .gap(px(12.))
+                .min_h(px(56.))
                 .px(px(16.))
-                .py(px(9.))
+                .py(px(8.))
                 .hover(|s| s.bg(theme::panel_hi()))
-                .child(
-                    ui::toggle(SharedString::from(format!("mod-{i}")), enabled)
-                        .tooltip(ui::tip(if enabled { "Disable (moves it aside, nothing is deleted)" } else { "Enable" }))
-                        .on_click(move |_, _, cx| toggle_ws.update(cx, |ws, cx| ws.set_mod_enabled(toggle_path.clone(), !enabled, cx))),
-                )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .when(!enabled, |d| d.opacity(0.6))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child(m.name.clone()))
-                                .when_some(m.version.clone(), |d, v| d.child(div().text_size(px(12.)).text_color(theme::text_muted()).child(format!("v{v}"))))
+                                .min_w_0()
+                                // Names are short: let a long one wrap
+                                // rather than clamp an inline item.
+                                .child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .line_height(px(20.))
+                                        .text_color(if enabled { theme::text() } else { theme::text_muted() })
+                                        .child(m.name.clone()),
+                                )
+                                .when_some(m.version.clone(), |d, v| d.child(ui::caption(format!("v{v}")).flex_none()))
                                 .child(ui::badge(m.kind.label(), kind_color)),
                         )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::text_muted())
-                                .truncate()
-                                .child(m.description.clone().unwrap_or_else(|| m.path.display().to_string())),
-                        ),
+                        .child(caption_style(clipped_with_tip(format!("mod-desc-{i}"), description, description_tip))),
+                )
+                .child(
+                    ui::toggle(SharedString::from(format!("mod-{i}")), enabled)
+                        .tooltip(ui::tip(if enabled { "Disable (moves it aside, nothing is deleted)" } else { "Enable" }))
+                        .on_click(move |_, _, cx| toggle_ws.update(cx, |ws, cx| ws.set_mod_enabled(toggle_path.clone(), !enabled, cx))),
                 )
                 .child({
                     let (ws, path, name) = (menu_ws.clone(), menu_path.clone(), menu_name.clone());
                     Button::new(SharedString::from(format!("mod-more-{i}")))
                         .ghost()
-                        .small()
-                        .icon(gpui_component::Icon::empty().path(Icon::More.path()))
+                        .w(px(32.))
+                        .h(px(32.))
+                        .flex_none()
+                        .tooltip("More options")
+                        .child(ui::icon(Icon::More).text_color(theme::text()))
                         .dropdown_menu(move |menu, _, _| mod_menu(menu, &ws, &path, &name, enabled))
                 })
                 .context_menu(move |menu, _, _| mod_menu(menu, &menu_ws, &menu_path, &menu_name, enabled)),
@@ -239,9 +293,18 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     div()
         .flex()
         .flex_col()
-        .gap(px(18.))
-        .child(page_header("Mods", "The community mod loader and your installed mods. Disabled mods are moved aside, never deleted.", vec![open_sdk, open_text, add]))
-        .child(div().flex().flex_col().gap(px(8.)).child(ui::section_title("Mod loader", None)).child(sdk).child(links))
+        .gap(px(20.))
+        .child(page_header("Mods", "The community mod loader and your installed mods. Disabled mods are moved aside, never deleted.", vec![open_folders, add]))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(ui::section_title("Mod loader", None))
+                .child(sdk)
+                .children(legacy)
+                .child(links),
+        )
         .child(div().flex().flex_col().gap(px(8.)).child(ui::section_title("Installed mods", None)).child(list))
         .into_any_element()
 }

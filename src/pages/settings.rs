@@ -1,14 +1,46 @@
 //! App-wide preferences, per-game folders, profiles, updates and diagnostics.
 
-use gpui::{AnyElement, App, ClipboardItem, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, ClipboardItem, Div, Entity, IntoElement, ParentElement, SharedString, Stateful, Styled, Window, div, prelude::*, px};
+use gpui_component::button::Button;
 use gpui_component::input::Input;
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 
-use super::{confirm, open_folder, page_header, pick_paths};
+use super::{caption_style, clipped_with_tip, confirm, count, friendly_now, open_folder, page_header, pick_paths, short_path};
 use crate::core::backup;
 use crate::mods::SdkStatus;
 use crate::theme::{self, Icon};
 use crate::ui::{self, Variant, setting_row};
 use crate::workspace::Workspace;
+
+/// Settings page column width (the Gallery's SettingsPage max width).
+const COLUMN: f32 = 1064.;
+
+/// Id of the About expander in the workspace's expanded set.
+const ABOUT: &str = "app-settings-about";
+
+/// A clickable SettingsCard: the whole row is the button, with an action
+/// glyph on the right (open-in-new for link-outs, a chevron for pages).
+fn link_row(
+    id: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    glyph: Icon,
+    on_click: impl Fn(&mut App) + 'static,
+) -> Stateful<Div> {
+    ui::focusable(div().id(id))
+        .flex()
+        .items_center()
+        .gap(px(16.))
+        .min_h(px(68.))
+        .px(px(16.))
+        .py(px(12.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::panel_hi()))
+        .active(|s| s.bg(theme::panel_pressed()))
+        .child(div().flex_1().min_w_0().flex().flex_col().child(ui::title(title)).child(ui::caption(description)))
+        .child(ui::icon(glyph).size(px(if glyph == Icon::Link { 13. } else { 12. })).text_color(theme::text_muted()))
+        .on_click(move |_, _, cx| on_click(cx))
+}
 
 pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> AnyElement {
     let state = ws.read(cx);
@@ -24,19 +56,22 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let appearance = ui::panel()
         .flex()
         .flex_col()
-        .child(setting_row(
+        .child(link_row(
+            "set-colors",
             "Theme",
-            "Follows Windows: light or dark mode and your accent color, set in Personalization > Colors.",
-            ui::button("set-colors", "Windows color settings", Some(Icon::Link), Variant::Secondary)
-                .on_click(|_, _, cx| cx.open_url("ms-settings:colors"))
-                .into_any_element(),
+            format!(
+                "Follows Windows: {} mode and your accent color. Change them in Personalization > Colors.",
+                if theme::is_dark() { "dark" } else { "light" }
+            ),
+            Icon::Link,
+            |cx| cx.open_url("ms-settings:colors"),
         ))
         .child(ui::divider())
         .child(setting_row(
             "Button sounds",
             if sounds { "Clicks and chimes from the game's own launcher files." } else { "Not available: no Borderlands launcher sounds found on this PC." },
-            ui::toggle("set-sound", !muted && sounds)
-                .when(!sounds, |d| d.opacity(0.4))
+            ui::toggle_if(sounds, "set-sound", !muted && sounds)
+                .when(!sounds, |d| d.tooltip(ui::tip("No launcher sounds found on this PC")))
                 .on_click(move |_, _, cx| mute_ws.update(cx, |ws, cx| ws.set_muted(!muted, cx)))
                 .into_any_element(),
         ))
@@ -44,8 +79,10 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(setting_row(
             "Menu music",
             "Loops the launcher's music while Vault Patcher is open.",
-            ui::toggle("set-music", music && !muted && sounds)
-                .when(!sounds || muted, |d| d.opacity(0.4))
+            ui::toggle_if(sounds && !muted, "set-music", music && !muted && sounds)
+                .when(!sounds || muted, |d| {
+                    d.tooltip(ui::tip(if sounds { "Turn on button sounds first" } else { "No launcher sounds found on this PC" }))
+                })
                 .on_click(move |_, _, cx| music_ws.update(cx, |ws, cx| ws.set_music(!music, cx)))
                 .into_any_element(),
         ));
@@ -56,13 +93,15 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let reset_ws = ws.clone();
     let install_path = game.install.as_ref().map(|i| i.root.clone());
     let config_path = game.config_dir.clone();
-    let folder_row = |id: &'static str, title: &'static str, value: String, path: Option<std::path::PathBuf>, on_pick: Box<dyn Fn(&mut App)>| {
+    let folder_row = |id: &'static str, title: &'static str, value: (String, String), path: Option<std::path::PathBuf>, on_pick: Box<dyn Fn(&mut App)>| {
+        let (shown, full) = value;
         div()
             .flex()
             .items_center()
             .gap(px(12.))
+            .min_h(px(68.))
             .px(px(16.))
-            .py(px(10.))
+            .py(px(12.))
             .child(
                 div()
                     .flex_1()
@@ -70,7 +109,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .flex()
                     .flex_col()
                     .child(ui::title(title))
-                    .child(div().font_family(theme::font_mono()).text_size(px(12.)).text_color(theme::text_muted()).truncate().child(value)),
+                    .child(caption_style(clipped_with_tip(format!("{id}-path"), shown, full)).font_family(theme::font_mono())),
             )
             .when_some(path, |d, p| {
                 d.child(
@@ -81,13 +120,17 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             })
             .child(ui::button(SharedString::from(format!("{id}-pick")), "Change…", None, Variant::Secondary).on_click(move |_, _, cx| on_pick(cx)))
     };
+    let not_found = || ("Not found".to_string(), "Not found".to_string());
     let folders = ui::panel()
         .flex()
         .flex_col()
         .child(folder_row(
             "install",
             "Install folder",
-            game.install.as_ref().map(|i| format!("{}  ({})", i.root.display(), i.store.label())).unwrap_or_else(|| "Not found".into()),
+            game.install
+                .as_ref()
+                .map(|i| (format!("{}  ({})", short_path(&i.root, 64), i.store.label()), format!("{}  ({})", i.root.display(), i.store.label())))
+                .unwrap_or_else(not_found),
             install_path,
             Box::new(move |cx| {
                 let ws = install_ws.clone();
@@ -102,7 +145,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(folder_row(
             "config",
             "Settings folder",
-            game.config_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not found".into()),
+            game.config_dir.as_ref().map(|p| (short_path(p, 64), p.display().to_string())).unwrap_or_else(not_found),
             config_path,
             Box::new(move |cx| {
                 let ws = config_ws.clone();
@@ -117,7 +160,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(setting_row(
             "Auto-detect",
             "Forget custom folders and look in Steam, Epic and Documents\\My Games again.",
-            ui::button("reset-paths", "Use auto-detect", Some(Icon::Refresh), Variant::Ghost)
+            ui::button("reset-paths", "Use auto-detect", Some(Icon::Refresh), Variant::Secondary)
                 .on_click(move |_, _, cx| reset_ws.update(cx, |ws, cx| ws.clear_manual_paths(cx)))
                 .into_any_element(),
         ));
@@ -126,14 +169,25 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let lock = state.settings.lock_configs_after_apply;
     let lock_ws = ws.clone();
     let keep = state.settings.max_backups.unwrap_or(30);
-    let mut keep_chips = div().flex().gap(px(4.));
-    for n in [10usize, 30, 100] {
-        let ws = ws.clone();
-        keep_chips = keep_chips.child(
-            ui::chip(SharedString::from(format!("keep-{n}")), n.to_string(), keep == n)
-                .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.update_settings(|s| s.max_backups = Some(n), cx))),
-        );
-    }
+    let keep_ws = ws.clone();
+    // ComboBox: pick one of a few values.
+    let keep_box = Button::new("keep-backups")
+        .outline()
+        .dropdown_caret(true)
+        .label(count(keep, "backup", "backups"))
+        .h(px(32.))
+        .min_w(px(160.))
+        .dropdown_menu(move |mut menu, _, _| {
+            for n in [10usize, 30, 100] {
+                let ws = keep_ws.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(count(n, "backup", "backups"))
+                        .checked(keep == n)
+                        .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.update_settings(|s| s.max_backups = Some(n), cx))),
+                );
+            }
+            menu
+        });
     let behavior = ui::panel()
         .flex()
         .flex_col()
@@ -148,7 +202,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .child(setting_row(
             "Backups to keep",
             "Older automatic settings backups are pruned. Your original settings and exe/SDK backups are always kept.",
-            keep_chips.into_any_element(),
+            keep_box.into_any_element(),
         ));
 
     // ---- updates & diagnostics
@@ -160,24 +214,25 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         _ => "Couldn't check for updates (offline?).".into(),
     };
     let diag_ws = ws.clone();
+    let version_title = format!("Vault Patcher {}", env!("CARGO_PKG_VERSION"));
+    let version_row = match app_update {
+        Some((tag, page)) => setting_row(
+            version_title,
+            format!("Version {tag} is available."),
+            ui::button("get-update", "Download", Some(Icon::Download), Variant::Primary)
+                .on_click(move |_, _, cx| cx.open_url(&page))
+                .into_any_element(),
+        )
+        .into_any_element(),
+        None => link_row("releases", version_title, format!("Up to date. {sdk_line} Opens the release notes."), Icon::Link, |cx| {
+            cx.open_url(&format!("https://github.com/{}/releases", crate::compare::IMAGE_REPO))
+        })
+        .into_any_element(),
+    };
     let updates = ui::panel()
         .flex()
         .flex_col()
-        .child(setting_row(
-            format!("Vault Patcher {}", env!("CARGO_PKG_VERSION")),
-            match &app_update {
-                Some((tag, _)) => format!("Version {tag} is available."),
-                None => format!("Up to date. {sdk_line}"),
-            },
-            match app_update {
-                Some((_, page)) => ui::button("get-update", "Download", Some(Icon::Download), Variant::Primary)
-                    .on_click(move |_, _, cx| cx.open_url(&page))
-                    .into_any_element(),
-                None => ui::button("releases", "Releases", Some(Icon::Link), Variant::Ghost)
-                    .on_click(|_, _, cx| cx.open_url(&format!("https://github.com/{}/releases", crate::compare::IMAGE_REPO)))
-                    .into_any_element(),
-            },
-        ))
+        .child(version_row)
         .child(ui::divider())
         .child(setting_row(
             "Copy diagnostics",
@@ -191,36 +246,81 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .into_any_element(),
         ))
         .child(ui::divider())
-        .child(setting_row(
-            "Report a problem",
-            "Opens the issue tracker. Paste the diagnostics into your report.",
-            ui::button("issues", "Open", Some(Icon::Bug), Variant::Ghost)
-                .on_click(|_, _, cx| cx.open_url(&format!("https://github.com/{}/issues", crate::compare::IMAGE_REPO)))
-                .into_any_element(),
-        ));
+        .child(link_row("issues", "Report a problem", "Opens the issue tracker. Paste the diagnostics into your report.", Icon::Link, |cx| {
+            cx.open_url(&format!("https://github.com/{}/issues", crate::compare::IMAGE_REPO))
+        }));
 
-    // ---- about
+    // ---- about: a SettingsExpander
     let data_dir = backup::data_dir();
-    let about = ui::panel().flex().flex_col().child(setting_row(
-        "About",
-        format!(
-            "Vault Patcher {} · built with GPUI and gpui-component. Settings verified against live game files, PCGamingWiki, the Nvidia tweak guide, OpenBLCMM and the BLCMods wiki. Icons: Lucide (ISC). Not affiliated with Gearbox or 2K.",
-            env!("CARGO_PKG_VERSION")
-        ),
-        ui::button("open-data", "Data folder", Some(Icon::Folder), Variant::Ghost)
-            .on_click(move |_, _, cx| {
-                std::fs::create_dir_all(&data_dir).ok();
-                open_folder(&data_dir, cx)
-            })
-            .into_any_element(),
-    ));
-
-    div()
-        .max_w(px(860.))
+    let about_open = state.setup_expanded.contains(ABOUT);
+    let about_ws = ws.clone();
+    let about = ui::panel()
         .flex()
         .flex_col()
-        .gap(px(22.))
-        .child(page_header("App Settings", "Preferences for Vault Patcher itself.", vec![]))
+        .child(
+            ui::focusable(div().id("about-header"))
+                .flex()
+                .items_center()
+                .gap(px(16.))
+                .min_h(px(68.))
+                .px(px(16.))
+                .py(px(12.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::panel_hi()))
+                .active(|s| s.bg(theme::panel_pressed()))
+                .child(ui::icon(Icon::Info).text_color(theme::text_muted()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(ui::title("About Vault Patcher"))
+                        .child(ui::caption(format!("Version {} · not affiliated with Gearbox or 2K", env!("CARGO_PKG_VERSION")))),
+                )
+                .child(div().size(px(32.)).flex().flex_none().items_center().justify_center().child(
+                    ui::icon(if about_open { Icon::ChevronUp } else { Icon::ChevronDown }).size(px(12.)).text_color(theme::text_muted()),
+                ))
+                .on_click(move |_, _, cx| about_ws.update(cx, |ws, cx| ws.toggle_expanded(ABOUT, cx))),
+        )
+        .when(about_open, |d| {
+            let row = |title: &'static str, text: &'static str| {
+                div().pl(px(48.)).pr(px(16.)).py(px(12.)).flex().flex_col().child(ui::title(title)).child(ui::caption(text))
+            };
+            d.child(
+                div()
+                    .border_t_1()
+                    .border_color(theme::line())
+                    .bg(theme::panel_lo())
+                    .flex()
+                    .flex_col()
+                    .child(row("Built with", "GPUI and gpui-component."))
+                    .child(ui::divider())
+                    .child(row(
+                        "Sources",
+                        "Settings verified against live game files, PCGamingWiki, the Nvidia tweak guide, OpenBLCMM and the BLCMods wiki.",
+                    ))
+                    .child(ui::divider())
+                    .child(row(
+                        "Icons and fonts",
+                        "Icons are Segoe Fluent Icons from Windows. Where Segoe UI isn't installed, text falls back to the bundled Noto Sans (SIL Open Font License).",
+                    ))
+                    .child(ui::divider())
+                    .child(link_row("open-data", "Data folder", "Backups, profiles and settings Vault Patcher keeps on this PC.", Icon::Link, move |cx| {
+                        std::fs::create_dir_all(&data_dir).ok();
+                        open_folder(&data_dir, cx)
+                    })
+                    .pl(px(48.))),
+            )
+        });
+
+    div()
+        .w_full()
+        .max_w(px(COLUMN))
+        .flex()
+        .flex_col()
+        .gap(px(24.))
+        .child(page_header("App settings", "Preferences for Vault Patcher itself.", vec![]))
         .child(section("Appearance and sound", appearance))
         .child(section(&format!("{} folders", def.name), folders))
         .child(section("Behavior", behavior))
@@ -230,12 +330,12 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             let ws = ws.clone();
             d.child(section(
                 "Tools",
-                ui::panel().flex().flex_col().child(setting_row(
+                ui::panel().flex().flex_col().child(link_row(
+                    "open-capture",
                     "Comparison capture",
                     "Re-shoot the comparison screenshots on this PC (about 30 minutes; the game runs on its own).",
-                    ui::button("open-capture", "Open", Some(Icon::Camera), Variant::Secondary)
-                        .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.navigate(crate::games::PageKind::Capture, cx)))
-                        .into_any_element(),
+                    Icon::ChevronRight,
+                    move |cx| ws.update(cx, |ws, cx| ws.navigate(crate::games::PageKind::Capture, cx)),
                 )),
             ))
         })
@@ -274,7 +374,7 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                 }),
             )
             .child(
-                ui::button("profile-import", "Import…", Some(Icon::FileUp), Variant::Ghost)
+                ui::button("profile-import", "Import…", Some(Icon::FileUp), Variant::Secondary)
                     .tooltip(ui::tip("Add a profile file someone shared with you"))
                     .on_click(move |_, _, cx| {
                         let ws = import_ws.clone();
@@ -291,7 +391,7 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
             div()
                 .px(px(16.))
                 .py(px(12.))
-                .child(ui::body("No profiles yet. Save one to switch between looks (e.g. \"Streaming\" and \"Max quality\") or to share your setup.").text_color(theme::text_muted())),
+                .child(ui::body("No profiles yet. Save one to switch between looks (e.g. \"Streaming\" and \"Max quality\") or to share your setup.")),
         );
     }
     for entry in entries {
@@ -306,9 +406,10 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap(px(8.))
+                .min_h(px(56.))
                 .px(px(16.))
                 .py(px(8.))
-                .child(ui::icon(Icon::Profile).text_color(theme::text_dim()))
+                .child(ui::icon(Icon::Profile).text_color(theme::text_muted()).mr(px(4.)))
                 .child(
                     div()
                         .flex_1()
@@ -316,7 +417,12 @@ pub(crate) fn profiles_section(ws: &Entity<Workspace>, cx: &App) -> AnyElement {
                         .flex()
                         .flex_col()
                         .child(ui::title(entry.name.clone()))
-                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(format!("{} settings · saved {}", entry.count, entry.created))),
+                        .child(caption_style(
+                            div()
+                                .id(SharedString::from(format!("pt-{file_name}")))
+                                .tooltip(ui::tip(format!("Saved {}", entry.created)))
+                                .child(format!("{} · saved {}", count(entry.count, "setting", "settings"), friendly_now(&entry.created))),
+                        )),
                 )
                 .child(
                     ui::button(SharedString::from(format!("pl-{file_name}")), "Load", None, Variant::Secondary)

@@ -19,8 +19,8 @@ mod tweaks;
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, App, Entity, IntoElement, ParentElement, PathPromptOptions, PromptLevel, Styled,
-    Window, div, prelude::*, px,
+    AnyElement, App, Div, ElementId, Entity, FontWeight, IntoElement, ParentElement, PathPromptOptions, PromptLevel,
+    SharedString, Stateful, Styled, Window, div, prelude::*, px,
 };
 
 use crate::games::{NavItem, PageKind};
@@ -50,6 +50,36 @@ pub fn fills_height(kind: PageKind) -> bool {
 
 /// Standard page header: title, one-line subtitle, and right-side actions.
 pub(crate) fn page_header(title: &str, subtitle: &str, actions: Vec<AnyElement>) -> impl IntoElement {
+    header(ui::display(title.to_string(), 28.).into_any_element(), subtitle, actions)
+}
+
+/// Page header whose title is a BreadcrumbBar: the parent page (a link back
+/// to it) › this page.
+pub(crate) fn breadcrumb_header(parent: &'static str, on_parent: impl Fn(&mut App) + 'static, title: &str, subtitle: &str) -> impl IntoElement {
+    let crumbs = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            ui::focusable(div().id("breadcrumb-parent"))
+                .rounded(px(theme::RADIUS))
+                .font_family(theme::font_display())
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(28.))
+                .line_height(px(36.))
+                .text_color(theme::text_muted())
+                .cursor_pointer()
+                .hover(|s| s.text_color(theme::text()))
+                .tooltip(ui::tip(format!("Back to {parent}")))
+                .child(parent)
+                .on_click(move |_, _, cx| on_parent(cx)),
+        )
+        .child(ui::icon(Icon::ChevronRight).size(px(16.)).text_color(theme::text_muted()))
+        .child(ui::display(title.to_string(), 28.));
+    header(crumbs.into_any_element(), subtitle, Vec::new())
+}
+
+fn header(title: AnyElement, subtitle: &str, actions: Vec<AnyElement>) -> impl IntoElement {
     div()
         .flex()
         .items_end()
@@ -61,37 +91,122 @@ pub(crate) fn page_header(title: &str, subtitle: &str, actions: Vec<AnyElement>)
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .child(ui::display(title.to_string(), 28.))
+                .gap(px(4.))
+                .child(title)
                 .child(ui::body(subtitle.to_string()).max_w(px(760.))),
         )
-        .child(div().flex().gap(px(8.)).children(actions))
+        .child(div().flex_none().flex().gap(px(8.)).children(actions))
 }
 
-/// Shown when the game or its config can't be found.
+/// Shown when the game or its config can't be found: an Error InfoBar with a
+/// "Locate game" action.
 pub(crate) fn missing_notice(title: &str, detail: &str, ws: &Entity<Workspace>) -> AnyElement {
     let ws = ws.clone();
-    ui::card(theme::danger())
+    ui::info_bar(ui::Severity::Error, title.to_string(), detail.to_string())
         .child(
-            ui::card_body()
-                .p(px(14.))
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .child(ui::icon(Icon::Alert).size(px(20.)).text_color(theme::danger()))
-                .child(div().flex_1().min_w_0().flex().flex_col().child(ui::title(title.to_string())).child(ui::body(detail.to_string())))
-                .child(
-                    ui::button("missing-browse", "Locate game", Some(Icon::Folder), ui::Variant::Secondary).on_click(move |_, _, cx| {
-                        let ws = ws.clone();
-                        pick_paths(false, true, false, cx, move |paths, cx| {
-                            if let Some(p) = paths.into_iter().next() {
-                                ws.update(cx, |ws, cx| ws.set_manual_install(p, cx));
-                            }
-                        });
-                    }),
-                ),
+            ui::button("missing-browse", "Locate game", Some(Icon::Folder), ui::Variant::Secondary)
+                .tooltip(ui::tip("Pick the folder the game is installed in"))
+                .on_click(move |_, _, cx| {
+                    let ws = ws.clone();
+                    pick_paths(false, true, false, cx, move |paths, cx| {
+                        if let Some(p) = paths.into_iter().next() {
+                            ws.update(cx, |ws, cx| ws.set_manual_install(p, cx));
+                        }
+                    });
+                }),
         )
         .into_any_element()
+}
+
+/// Makes text one line that ends in "…" when it doesn't fit its width (from
+/// the parent: a stretched `flex_col` child or a `flex_1().min_w_0()` item).
+///
+/// Not `truncate()`: that sets `whitespace_nowrap`, and gpui's text measure
+/// cache ignores the truncation width for unwrapped text, so the first probe
+/// wins (the whole text, clipped mid-glyph, or a lone "…"). Wrapping text
+/// clamped to one line is measured again whenever its width changes.
+pub(crate) fn one_line<E: Styled>(e: E) -> E {
+    e.min_w_0().text_ellipsis().line_clamp(1)
+}
+
+/// One line of text that ends in "…" when it doesn't fit ([`one_line`]),
+/// with the whole text in a tooltip. `id` must be unique among its siblings.
+pub(crate) fn clipped(id: impl Into<SharedString>, text: impl Into<SharedString>) -> Stateful<Div> {
+    let text: SharedString = text.into();
+    clipped_with_tip(id, text.clone(), text)
+}
+
+/// [`clipped`] with a different (usually longer) tooltip than the text.
+pub(crate) fn clipped_with_tip(id: impl Into<SharedString>, text: impl Into<SharedString>, tip: impl Into<SharedString>) -> Stateful<Div> {
+    one_line(div().id(ElementId::Name(id.into()))).tooltip(ui::tip(tip)).child(text.into())
+}
+
+/// Caption-size (12/16, secondary text) [`clipped`] line: row descriptions.
+pub(crate) fn clipped_caption(id: impl Into<SharedString>, text: impl Into<SharedString>) -> Stateful<Div> {
+    caption_style(clipped(id, text))
+}
+
+/// Caption type (12/16, secondary text) on any element.
+pub(crate) fn caption_style<E: Styled>(e: E) -> E {
+    e.text_size(px(12.)).line_height(px(16.)).text_color(theme::text_muted())
+}
+
+/// A path shortened in the middle so the drive and the last folders both stay
+/// visible: `C:\Users\…\sandbox\bl2`. Paths up to `max` characters are
+/// returned as they are.
+pub(crate) fn short_path(path: &std::path::Path, max: usize) -> String {
+    let full = path.display().to_string();
+    if full.chars().count() <= max {
+        return full;
+    }
+    let sep = if full.contains('\\') { '\\' } else { '/' };
+    let parts: Vec<&str> = full.split(sep).collect();
+    if parts.len() <= 3 {
+        return full;
+    }
+    let head = parts[..2].join(&sep.to_string());
+    let budget = max.saturating_sub(head.chars().count() + 2);
+    // Keep as many trailing folders as fit (always at least the last one).
+    let mut tail: Vec<&str> = Vec::new();
+    let mut used = 0;
+    for part in parts[2..].iter().rev() {
+        let len = part.chars().count() + usize::from(!tail.is_empty());
+        if !tail.is_empty() && used + len > budget {
+            break;
+        }
+        used += len;
+        tail.insert(0, part);
+    }
+    if tail.len() == parts.len() - 2 {
+        return full;
+    }
+    format!("{head}{sep}…{sep}{}", tail.join(&sep.to_string()))
+}
+
+/// "1 setting", "3 settings".
+pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// A stored "YYYY-MM-DD HH:MM[:SS]" local time as people say it: "Today,
+/// 17:59", "Yesterday, 09:12", "25 Sep", or "25 Sep 2024" in other years.
+/// Anything unparseable comes back unchanged.
+pub(crate) fn friendly_time(stamp: &str, now: chrono::NaiveDateTime) -> String {
+    use chrono::{Datelike, NaiveDateTime};
+    let Some(at) = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"].iter().find_map(|f| NaiveDateTime::parse_from_str(stamp, f).ok()) else {
+        return stamp.to_string();
+    };
+    match (now.date() - at.date()).num_days() {
+        0 => format!("Today, {}", at.format("%H:%M")),
+        1 => format!("Yesterday, {}", at.format("%H:%M")),
+        _ if at.year() == now.year() => at.format("%-d %b").to_string(),
+        _ => at.format("%-d %b %Y").to_string(),
+    }
+}
+
+/// [`friendly_time`] against the local clock.
+pub(crate) fn friendly_now(stamp: &str) -> String {
+    friendly_time(stamp, chrono::Local::now().naive_local())
 }
 
 /// The game's Steam banner with its logo (or a plain title when the art
@@ -145,9 +260,9 @@ pub(crate) fn game_banner(ws: &Workspace, caption: String, actions: Vec<AnyEleme
                         .flex_col()
                         .gap(px(8.))
                         .child(div().flex().child(title))
-                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(caption)),
+                        .child(clipped_caption("banner-caption", caption)),
                 )
-                .child(div().flex().gap(px(8.)).children(actions)),
+                .child(div().flex_none().flex().gap(px(8.)).children(actions)),
         )
         .into_any_element()
 }
@@ -202,5 +317,42 @@ pub(crate) fn open_folder(path: &std::path::Path, cx: &mut App) {
         cx.open_with_system(path);
     } else if let Some(parent) = path.parent() {
         cx.open_with_system(parent);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{count, friendly_time, short_path};
+    use chrono::NaiveDateTime;
+    use std::path::Path;
+
+    fn at(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    #[test]
+    fn friendly_times() {
+        let now = at("2026-09-27 12:00:00");
+        assert_eq!(friendly_time("2026-09-27 09:05:01", now), "Today, 09:05");
+        assert_eq!(friendly_time("2026-09-26 23:59:59", now), "Yesterday, 23:59");
+        assert_eq!(friendly_time("2026-09-25 00:28:43", now), "25 Sep");
+        assert_eq!(friendly_time("2025-01-02 10:00", now), "2 Jan 2025");
+        assert_eq!(friendly_time("original", now), "original");
+    }
+
+    #[test]
+    fn short_paths_keep_both_ends() {
+        let p = Path::new(r"C:\Users\someone\AppData\Local\Temp\claude\sandbox\bl2");
+        let s = short_path(p, 30);
+        assert!(s.starts_with(r"C:\Users\…\"), "{s}");
+        assert!(s.ends_with(r"\sandbox\bl2"), "{s}");
+        assert!(s.chars().count() <= 30, "{s}");
+        assert_eq!(short_path(Path::new(r"D:\Games\BL2"), 30), r"D:\Games\BL2");
+    }
+
+    #[test]
+    fn counts() {
+        assert_eq!(count(1, "change", "changes"), "1 change");
+        assert_eq!(count(3, "change", "changes"), "3 changes");
     }
 }

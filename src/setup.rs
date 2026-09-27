@@ -28,8 +28,8 @@ impl Group {
         match self {
             Group::Essentials => "Essentials",
             Group::Performance => "Performance",
-            Group::Fixes => "Bug Fixes",
-            Group::Mods => "Mods & Quality of Life",
+            Group::Fixes => "Bug fixes",
+            Group::Mods => "Mods & quality of life",
         }
     }
 }

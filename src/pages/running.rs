@@ -24,11 +24,11 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let card = ui::panel()
         .w(px(540.))
         .max_w_full()
-        .p(px(28.))
+        .p(px(32.))
         .flex()
         .flex_col()
         .items_center()
-        .gap(px(14.))
+        .gap(px(16.))
         .child(crate::app::game_icon(game.art.icon.clone(), def.short, 64.))
         .child(
             div()
@@ -49,9 +49,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         )
         .child(
             div()
-                .pt(px(6.))
+                .pt(px(8.))
                 .flex()
-                .gap(px(10.))
+                .gap(px(8.))
                 .child(
                     ui::button("running-minimize", "Minimize to background", Some(Icon::Minimize), Variant::Primary)
                         .tooltip(ui::tip("Mutes Vault Patcher and checks in every 10 seconds. It comes back when you quit the game."))
@@ -62,9 +62,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         }),
                 )
                 .child(
-                    ui::button("running-close", "Force close", Some(Icon::Close), Variant::Secondary)
-                        .when(closing, |b| b.opacity(0.6))
-                        .tooltip(ui::tip(format!("Ends {name} right away")))
+                    ui::button_if(!closing, "running-close", "Force close", Some(Icon::Close), Variant::Secondary)
+                        .tooltip(ui::tip(if closing { "Wait for the current task to finish".to_string() } else { format!("Ends {name} right away") }))
                         .on_click(move |_, window, cx| {
                             if closing {
                                 return;
@@ -95,7 +94,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .flex()
         .items_center()
         .justify_center()
-        .p(px(28.))
+        .p(px(32.))
         .child(card)
         .into_any_element()
 }

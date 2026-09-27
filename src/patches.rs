@@ -24,6 +24,8 @@ pub struct ExePatch {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
+    /// Not shown: a rarity stripe on a patch meant nothing to people.
+    #[allow(dead_code)]
     pub rarity: Rarity,
     pub kind: ExePatchKind,
     /// Shown as a caveat under the description.

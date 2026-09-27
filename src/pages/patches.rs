@@ -18,20 +18,18 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let def = game.def;
 
     let mut page = div().flex().flex_col().gap(px(20.)).child(page_header(
-        "Exe Patches",
+        "Exe patches",
         "Signature-based patches for the game executable. Each is verified against the exe before it's offered, and the exe is backed up before every change.",
         vec![],
     ));
 
     let sdk_installed = matches!(game.sdk, SdkStatus::Installed(_) | SdkStatus::Detected);
     if sdk_installed {
-        page = page.child(
-            ui::card(theme::echo()).child(
-                ui::card_body().p(px(14.)).child(ui::body(
-                    "The Python SDK is installed: it applies the console and array-limit edits in memory at startup, so you don't need the hex edits below.",
-                )),
-            ),
-        );
+        page = page.child(ui::info_bar(
+            ui::Severity::Info,
+            "The Python SDK is installed",
+            "It applies the console and array-limit edits in memory at startup, so you don't need the hex edits below.",
+        ));
     }
 
     match &game.exe {
@@ -92,35 +90,33 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     _ => None,
                 };
                 list = list.when(pi > 0, |d| d.child(ui::divider())).child(
-                    div().child(
-                        div()
-                            .px(px(16.))
-                            .py(px(12.))
-                            .flex()
-                            .items_center()
-                            .gap(px(16.))
-                            .child(div().w(px(3.)).h(px(36.)).flex_none().rounded_full().bg(patch.rarity.color()))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(10.))
-                                            .child(ui::title(patch.name))
-                                            .child(ui::badge(status, color)),
-                                    )
-                                    .child(ui::body(patch.description))
-                                    .when_some(patch.note, |d, n| {
-                                        d.child(div().text_size(px(12.)).text_color(theme::text_muted()).child(n))
-                                    }),
-                            )
-                            .children(action),
-                    ),
+                    div()
+                        .min_h(px(68.))
+                        .px(px(16.))
+                        .py(px(12.))
+                        .flex()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .child(ui::title(quote_code(patch.name)))
+                                        .child(ui::badge(status, color)),
+                                )
+                                .child(ui::body(quote_code(patch.description)))
+                                .when_some(patch.note, |d, n| d.child(ui::caption(quote_code(n)))),
+                        )
+                        .children(action),
                 );
             }
             if def.patches.is_empty() {
@@ -130,28 +126,52 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         }
     }
 
-    // Config locking
+    // Config locking: a SettingsCard with the lock state as its icon.
     let locked = state.configs_locked();
     let lock_ws = ws.clone();
     page = page.child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(ui::section_title(
-                "Config lock",
-                Some("Marks the ini files read-only so the game, its launcher, or a co-op host can't revert your tweaks. The in-game options menu then shows \"Failed to save your settings\" — unlock before changing settings in-game.".into()),
-            ))
-            .child(
-                ui::panel().p(px(16.)).flex().items_center().gap(px(14.))
-                    .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).size(px(20.)).text_color(if locked { theme::accent_text() } else { theme::text_dim() }))
-                    .child(div().flex_1().child(ui::body(if locked { "Config files are locked (read-only)." } else { "Config files are writable." })))
-                    .child(
-                        ui::toggle("lock-configs", locked)
-                            .on_click(move |_, _, cx| lock_ws.update(cx, |ws, cx| ws.set_config_lock(!locked, cx))),
-                    ),
-            ),
+        div().flex().flex_col().gap(px(8.)).child(ui::section_title("Settings files", None)).child(
+            ui::panel()
+                .min_h(px(68.))
+                .px(px(16.))
+                .py(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(16.))
+                .child(ui::icon(if locked { Icon::Lock } else { Icon::Unlock }).text_color(if locked { theme::accent_text() } else { theme::text_muted() }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(ui::title("Lock settings files"))
+                        .child(ui::caption(
+                            "Marks the ini files read-only so the game, its launcher, or a co-op host can't revert your tweaks. The in-game options menu then shows \"Failed to save your settings\", so unlock before changing settings in-game.",
+                        )),
+                )
+                .child(
+                    ui::toggle("lock-configs", locked)
+                        .tooltip(ui::tip(if locked { "The ini files are read-only now" } else { "The ini files are writable now" }))
+                        .on_click(move |_, _, cx| lock_ws.update(cx, |ws, cx| ws.set_config_lock(!locked, cx))),
+                ),
+        ),
     );
 
     page.into_any_element()
+}
+
+/// Shows `code` spans in patch copy as quoted words ("the “set” command"):
+/// backticks would render literally.
+fn quote_code(text: &str) -> String {
+    let mut open = false;
+    text.chars()
+        .map(|c| match c {
+            '`' => {
+                open = !open;
+                if open { '\u{201C}' } else { '\u{201D}' }
+            }
+            c => c,
+        })
+        .collect()
 }
