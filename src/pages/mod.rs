@@ -14,7 +14,7 @@ mod quick;
 pub(crate) mod running;
 mod settings;
 mod setup;
-mod tweaks;
+pub(crate) mod tweaks;
 
 use std::path::PathBuf;
 

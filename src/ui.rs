@@ -160,16 +160,6 @@ pub fn panel() -> gpui::Div {
         .overflow_hidden()
 }
 
-/// Panel with a thin colored strip on the left edge (severity marker). Add
-/// content with `card_body()` so long text wraps.
-pub fn card(accent: Rgba) -> gpui::Div {
-    panel().flex().child(div().w(px(3.)).flex_none().bg(accent))
-}
-
-pub fn card_body() -> gpui::Div {
-    div().flex_1().min_w_0()
-}
-
 /// 1px divider between rows in a panel.
 pub fn divider() -> gpui::Div {
     div().h(px(1.)).flex_none().bg(theme::line())

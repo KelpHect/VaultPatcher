@@ -56,7 +56,7 @@ impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let ws = cx.new(Workspace::new);
         let page_host = cx.new(|cx| PageHost::new(ws.clone(), cx));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings  (Ctrl+F)"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings (Ctrl+F)"));
         let profile = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
         let search_ws = ws.clone();
         // Closing mid-capture or mid-install would leave the game half-changed.
@@ -706,7 +706,7 @@ impl Shell {
                     .pl(px(4.))
                     .flex()
                     .flex_col()
-                    .child(div().text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(format!("{} change(s) waiting", game.pending.len())))
+                    .child(div().text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(format!("{} waiting", crate::pages::tweaks::plural(game.pending.len(), "change"))))
                     .child(div().text_size(px(12.)).line_height(px(16.)).text_color(theme::text_muted()).truncate().child(format!(
                         "{}{}",
                         names.join(" · "),
@@ -928,7 +928,7 @@ impl Shell {
                 .child(ui::caption("A backup of the files is made before writing.").flex_1())
                 .child(ui::button("review-close", "Close", None, Variant::Secondary).on_click(move |_, _, cx| close_ws.update(cx, |ws, cx| ws.set_review(false, cx))))
                 .child(
-                    ui::button("review-apply", format!("Apply {count}"), Some(Icon::Check), Variant::Primary)
+                    ui::button("review-apply", format!("Apply {}", crate::pages::tweaks::plural(count, "change")), Some(Icon::Check), Variant::Primary)
                         .on_click(move |_, _, cx| apply_ws.update(cx, |ws, cx| ws.apply_pending(cx))),
                 ),
             move |cx| backdrop_ws.update(cx, |ws, cx| ws.set_review(false, cx)),
@@ -1277,7 +1277,7 @@ fn switch_mode(ws: &Entity<Workspace>, m: Mode, window: &mut Window, cx: &mut gp
     }
     let answer = window.prompt(
         gpui::PromptLevel::Info,
-        &format!("You have {pending} change(s) waiting to be applied."),
+        &format!("You have {} waiting to be applied.", crate::pages::tweaks::plural(pending, "change")),
         Some("Simple mode saves changes immediately. Apply the waiting changes now, or discard them?"),
         &["Apply and switch", "Discard and switch", "Cancel"],
         cx,

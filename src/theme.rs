@@ -224,10 +224,6 @@ pub fn text() -> Rgba {
 pub fn text_muted() -> Rgba {
     pick(0x0000009e, 0xffffffc5)
 }
-/// TextFillColorTertiary.
-pub fn text_dim() -> Rgba {
-    pick(0x00000072, 0xffffff87)
-}
 /// TextFillColorDisabled.
 pub fn text_disabled() -> Rgba {
     pick(0x0000005c, 0xffffff5d)

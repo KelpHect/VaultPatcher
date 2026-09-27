@@ -2,11 +2,9 @@
 //! pane on the right (full description, comparison slider, file location,
 //! reset). Advanced tweak pages and Simple's Quick settings share this view.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
-use gpui_component::input::InputState;
 
 use crate::controls;
 use crate::games::{GameDef, NavItem, PageKind};
@@ -152,18 +150,6 @@ pub(crate) fn plural(n: usize, word: &str) -> String {
     if n == 1 { format!("1 {word}") } else { format!("{n} {word}s") }
 }
 
-thread_local! {
-    static PLACEHOLDER_SET: Cell<Option<gpui::EntityId>> = const { Cell::new(None) };
-}
-
-/// The shared search box's placeholder, with the shortcut after one space.
-fn fix_placeholder(input: &Entity<InputState>, window: &mut Window, cx: &mut App) {
-    if PLACEHOLDER_SET.get() != Some(input.entity_id()) {
-        PLACEHOLDER_SET.set(Some(input.entity_id()));
-        input.update(cx, |s, cx| s.set_placeholder("Search settings (Ctrl+F)", window, cx));
-    }
-}
-
 /// The shared two-pane layout.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
@@ -194,7 +180,6 @@ pub(crate) fn view(
     };
 
     let search = search_input.map(|input| {
-        fix_placeholder(&input, window, cx);
         div()
             .w(px(280.))
             .flex_none()
