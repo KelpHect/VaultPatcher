@@ -190,6 +190,7 @@ pub struct Button {
     border_corners: Corners<bool>,
     border_edges: Edges<bool>,
     dropdown_caret: bool,
+    content_fill: bool,
     size: Size,
     compact: bool,
     tooltip: Option<(
@@ -239,6 +240,7 @@ impl Button {
             children: Vec::new(),
             loading_icon: None,
             dropdown_caret: false,
+            content_fill: false,
             tab_index: 0,
             tab_stop: true,
         }
@@ -351,6 +353,13 @@ impl Button {
     /// Default is true.
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Fork: let the content row fill the button (left-aligned) instead of
+    /// centering it, for ComboBox-style faces with a trailing chevron.
+    pub fn content_fill(mut self) -> Self {
+        self.content_fill = true;
         self
     }
 
@@ -565,6 +574,7 @@ impl RenderOnce for Button {
                     .id("label")
                     .items_center()
                     .justify_center()
+                    .when(self.content_fill, |this| this.flex_1().min_w_0().justify_start())
                     .button_text_size(self.size)
                     .map(|this| match self.size {
                         Size::XSmall => this.gap_1(),

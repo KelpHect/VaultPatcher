@@ -26,8 +26,10 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
     back into the frame inside the rounded rect (`backdrop_blur_y`) with 2%
     noise. Dual-source blending replaces the pixels by coverage; the frame is
     mostly transparent over Mica, so blending over it would keep the sharp
-    original showing. Scratch textures are created on first use, resized with
-    the window and dropped on device loss.
+    original showing. Only the region the two passes read is copied (each
+    backdrop plus three blur radii), and the scratch textures are created on
+    first use, resized with the window, freed after 3 s without a backdrop
+    and dropped on device loss.
   - Blade (Linux, `platform/blade`): swapchain images can't be sampled, so a
     frame with backdrops is drawn into an offscreen texture and copied to the
     drawable at the end (frames without them are unchanged). Each backdrop
@@ -46,7 +48,13 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
   1.05 → 1).
 - **Hover and press fades**: elements with hover/active styles fade their
   solid background to the new color over 83 ms (WinUI's brush transition),
-  from wherever the fade is, so quick moves don't jump.
+  from wherever the fade is, so quick moves don't jump. Targets are only
+  taken once hover is known (prepaint/paint), so a hovered element settles
+  instead of flipping between its layout and paint colors every frame.
+- **Frames on demand** (Windows): the vsync thread only wakes windows while
+  `FRAME_WANTED` is set: by a dirtied view, `on_next_frame` (animations),
+  input, or the one-second present after input. An idle window no longer runs
+  a frame callback at the monitor's refresh rate.
 - **Reduce motion**: `gpui::set_reduce_motion` / `gpui::reduce_motion()`
   turns the fades off and lets components skip their animations.
 - **Focus visuals**: `InteractiveElement::focus_visible(style)` applies only
@@ -63,6 +71,8 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
   mid-draw (the usual case) defers dropping its images until every window is
   back in `App::windows`, so the atlas textures are actually removed.
 - Fixed two float-literal inference warnings in `taffy.rs`.
+- `stacksafe` 1.0 (0.1 pulled in `proc-macro-error2`, which a future Rust
+  will reject).
 
 ## gpui-component
 
@@ -72,3 +82,8 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
 - Medium inputs are 32px tall (WinUI TextBox), whatever the rem size.
 - Popup menus open with a flyout entrance (fade over 83 ms while settling
   from 96% size), skipped under `gpui::reduce_motion()`.
+- Text inputs notify only when their bounds, cursor, selection or scroll
+  changed. Upstream notified from every paint, which kept any window with a
+  text box repainting at the monitor's refresh rate.
+- `Button::content_fill()` lets the content row fill the button, left
+  aligned, for ComboBox-style faces.

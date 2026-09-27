@@ -91,6 +91,17 @@ impl DispatchPhase {
     }
 }
 
+/// Fork: whether any window needs its next vsync. The Windows vsync thread
+/// only wakes windows while this is set, so an idle app doesn't run a
+/// frame callback at the monitor's refresh rate just to find nothing dirty.
+/// Set by anything that dirties a window or asks for a frame; each frame
+/// callback clears it when it leaves nothing pending.
+pub(crate) static FRAME_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn want_frame() {
+    FRAME_WANTED.store(true, std::sync::atomic::Ordering::Release);
+}
+
 struct WindowInvalidatorInner {
     pub dirty: bool,
     pub draw_phase: DrawPhase,
@@ -118,6 +129,7 @@ impl WindowInvalidator {
         inner.dirty_views.insert(entity);
         if inner.draw_phase == DrawPhase::None {
             inner.dirty = true;
+            want_frame();
             cx.push_effect(Effect::Notify { emitter: entity });
             true
         } else {
@@ -130,6 +142,9 @@ impl WindowInvalidator {
     }
 
     pub fn set_dirty(&self, dirty: bool) {
+        if dirty {
+            want_frame();
+        }
         self.inner.borrow_mut().dirty = dirty
     }
 
@@ -1026,6 +1041,8 @@ impl Window {
             let needs_present = needs_present.clone();
             let next_frame_callbacks = next_frame_callbacks.clone();
             let last_input_timestamp = last_input_timestamp.clone();
+            let pending_callbacks = next_frame_callbacks.clone();
+            let pending_present = needs_present.clone();
             move |request_frame_options| {
                 let next_frame_callbacks = next_frame_callbacks.take();
                 if !next_frame_callbacks.is_empty() {
@@ -1067,6 +1084,13 @@ impl Window {
                         window.complete_frame();
                     })
                     .log_err();
+
+                // Anything still pending keeps the vsync coming.
+                let pending = invalidator.is_dirty()
+                    || !pending_callbacks.borrow().is_empty()
+                    || pending_present.get()
+                    || (active.get() && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
+                FRAME_WANTED.store(pending, std::sync::atomic::Ordering::Release);
             }
         }));
         platform_window.on_resize(Box::new({
@@ -1656,6 +1680,7 @@ impl Window {
 
     /// Schedule the given closure to be run directly after the current frame is rendered.
     pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
+        want_frame();
         RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
     }
 
@@ -3656,6 +3681,7 @@ impl Window {
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
         self.last_input_timestamp.set(Instant::now());
+        want_frame();
         // Handlers may set this to false by calling `stop_propagation`.
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.

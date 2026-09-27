@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn short_paths_keep_both_ends() {
-        let p = Path::new(r"C:\Users\someone\AppData\Local\Temp\claude\sandbox\bl2");
+        let p = Path::new(r"C:\Users\someone\AppData\Local\Temp\vp\sandbox\bl2");
         let s = short_path(p, 30);
         assert!(s.starts_with(r"C:\Users\…\"), "{s}");
         assert!(s.ends_with(r"\sandbox\bl2"), "{s}");

@@ -47,6 +47,9 @@ pub(crate) struct DirectXRenderer {
     font_info: &'static FontInfo,
     /// Scratch textures for backdrop blur, sized to the window on first use.
     backdrop: Option<BackdropTargets>,
+    /// Last frame that drew a backdrop: the scratch textures (two
+    /// window-sized copies) are freed after a few seconds without one.
+    backdrop_used: std::time::Instant,
 }
 
 /// A copy of the frame drawn so far, and the horizontally blurred version.
@@ -221,6 +224,7 @@ impl DirectXRenderer {
             direct_composition,
             font_info: Self::get_font_info(),
             backdrop: None,
+            backdrop_used: std::time::Instant::now(),
         })
     }
 
@@ -343,6 +347,10 @@ impl DirectXRenderer {
 
     pub(crate) fn draw(&mut self, scene: &Scene) -> Result<()> {
         self.pre_draw()?;
+        // Menus and toasts come and go; don't hold their blur textures.
+        if scene.backdrops.is_empty() && self.backdrop.is_some() && self.backdrop_used.elapsed().as_secs() >= 3 {
+            self.backdrop = None;
+        }
         for batch in scene.batches() {
             match batch {
                 PrimitiveBatch::Backdrops(backdrops) => self.draw_backdrops(backdrops),
@@ -431,10 +439,34 @@ impl DirectXRenderer {
         {
             self.backdrop = Some(BackdropTargets::new(&self.devices.device, width, height)?);
         }
+        self.backdrop_used = std::time::Instant::now();
         let targets = self.backdrop.as_ref().unwrap();
         let context = &self.devices.device_context;
+        // Only what the two passes read: each backdrop plus three blur radii
+        // (the kernel's reach) and a pixel for linear filtering.
+        let mut region: Option<(f32, f32, f32, f32)> = None;
+        for b in backdrops {
+            let m = 3.0 * b.blur_radius.0 + 2.0;
+            let (x0, y0) = (b.bounds.origin.x.0 - m, b.bounds.origin.y.0 - m);
+            let (x1, y1) = (b.bounds.origin.x.0 + b.bounds.size.width.0 + m, b.bounds.origin.y.0 + b.bounds.size.height.0 + m);
+            region = Some(match region {
+                None => (x0, y0, x1, y1),
+                Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+            });
+        }
+        let (x0, y0, x1, y1) = region.unwrap_or((0., 0., width as f32, height as f32));
+        let copy = D3D11_BOX {
+            left: (x0.floor().max(0.) as u32).min(width),
+            top: (y0.floor().max(0.) as u32).min(height),
+            right: (x1.ceil().max(0.) as u32).min(width),
+            bottom: (y1.ceil().max(0.) as u32).min(height),
+            front: 0,
+            back: 1,
+        };
         unsafe {
-            context.CopyResource(&targets.source, &*self.resources.render_target);
+            if copy.right > copy.left && copy.bottom > copy.top {
+                context.CopySubresourceRegion(&targets.source, 0, copy.left, copy.top, 0, &*self.resources.render_target, 0, Some(&copy));
+            }
             context.ClearRenderTargetView(targets.blurred_target[0].as_ref().unwrap(), &[0.0; 4]);
             context.OMSetRenderTargets(Some(&targets.blurred_target), None);
         }

@@ -407,7 +407,7 @@ fn row(tweak: &'static Tweak, selected: bool, ws: &Entity<Workspace>, instant: b
         controls::status_dot(SharedString::from(format!("dot-{}", tweak.id)), waiting, changed),
         row_text(tweak.id, tweak.label, tweak.description, has_pictures, Some(tweak)),
         reset,
-        row_control(tweak, &value, ws, instant),
+        row_control(tweak, &value, ws, instant, cx),
         move |cx| select_ws.update(cx, |ws, cx| ws.select_tweak(tweak.id, cx)),
     )
 }
@@ -486,53 +486,20 @@ fn pick(tweak: &'static Tweak, ws: &Entity<Workspace>, instant: bool) -> control
     })
 }
 
-/// Segmented for a few short options, a ComboBox otherwise (the same rule
-/// in rows and the detail pane).
-fn choice(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, instant: bool, fill: bool) -> AnyElement {
+/// The select, in rows and the detail pane alike.
+fn choice(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, instant: bool, fill: bool, cx: &App) -> AnyElement {
     let Control::Choice(options) = tweak.control else { return div().into_any_element() };
     let suffix = if fill { "detail" } else { "row" };
-    let on_pick = pick(tweak, ws, instant);
-    if controls::use_segmented(options) {
-        let (wrap, segments) = controls::segmented(
-            options
-                .iter()
-                .map(|o| {
-                    let id = SharedString::from(format!("c-{}-{}-{suffix}", tweak.id, o.value));
-                    (id.into(), SharedString::from(o.label), matches!(value, Value::Choice(v) if *v == o.value))
-                })
-                .collect(),
-            fill,
-        );
-        let mut wrap = wrap;
-        for (seg, o) in segments.into_iter().zip(options.iter()) {
-            let on_pick = on_pick.clone();
-            let v = o.value;
-            wrap = wrap.child(seg.on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                on_pick(v, window, cx)
-            }));
-        }
-        return div()
-            .id(SharedString::from(format!("cw-{}-{suffix}", tweak.id)))
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .when(fill, |d| d.w_full())
-            .child(wrap)
-            .when_some(if let Value::Unknown(raw) = value { Some(raw.clone()) } else { None }, |d, raw| {
-                d.child(ui::badge(format!("Custom: {raw}"), theme::echo()))
-            })
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .into_any_element();
-    }
     let current = match value {
         Value::Unknown(raw) => format!("Custom: {raw}"),
         v => v.display(&tweak.control),
     };
     let selected = if let Value::Choice(v) = value { Some(*v) } else { None };
     div()
+        .id(SharedString::from(format!("cw-{}-{suffix}", tweak.id)))
         .when(fill, |d| d.w_full().flex().flex_col())
-        .child(controls::combo_box(SharedString::from(format!("dd-{}-{suffix}", tweak.id)), current, options, selected, on_pick))
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(controls::select(SharedString::from(format!("dd-{}-{suffix}", tweak.id)), current, options, selected, fill, pick(tweak, ws, instant), cx))
         .into_any_element()
 }
 
@@ -551,7 +518,7 @@ fn toggle(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, instant:
 }
 
 /// The in-row control.
-fn row_control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, instant: bool) -> AnyElement {
+fn row_control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, instant: bool, cx: &App) -> AnyElement {
     match tweak.control {
         Control::Toggle => toggle(tweak, value, ws, instant, "row"),
         Control::Slider { .. } => div()
@@ -564,7 +531,7 @@ fn row_control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, ins
             .child(slider(tweak, num_or_default(tweak, value), ws, instant, "row"))
             .child(readout(tweak, &shown_value(tweak, value, "row")).w(px(80.)))
             .into_any_element(),
-        Control::Choice(_) => choice(tweak, value, ws, instant, false),
+        Control::Choice(_) => choice(tweak, value, ws, instant, false, cx),
     }
 }
 
@@ -574,7 +541,7 @@ fn detail_control(tweak: &'static Tweak, value: &Value, ws: &Entity<Workspace>, 
     let Control::Slider { min, step, recommended, .. } = tweak.control else {
         return match tweak.control {
             Control::Toggle => toggle(tweak, value, ws, instant, "detail"),
-            _ => choice(tweak, value, ws, instant, true),
+            _ => choice(tweak, value, ws, instant, true, cx),
         };
     };
     let control = tweak.control;

@@ -1,5 +1,5 @@
 //! Settings-page controls built on `ui`, drawn to the WinUI 3 specs:
-//! NumberBox, RangeSlider, the joined segmented choice and ComboBox, the
+//! NumberBox, RangeSlider, the choice select, the
 //! FPS-cost meter, the row status dot and reset button, selection cards and
 //! the 32px TextBox frame.
 
@@ -183,81 +183,81 @@ pub fn tabular<E: Styled>(mut e: E) -> E {
 
 // ---- choices ----------------------------------------------------------------------
 
-/// WinUI's rule for a pick-one setting: 2–4 short options (≤ 12 characters)
-/// are a segmented control; more, or longer ones, a ComboBox.
-pub fn use_segmented(options: &[Opt]) -> bool {
-    (2..=4).contains(&options.len()) && options.iter().all(|o| o.label.chars().count() <= 12)
-}
-
-/// Joined segmented control: 32px, 1px dividers, outer corners 4, the
-/// selected segment filled with the accent. `fill` stretches the segments to
-/// the available width (detail pane). Attach `on_click` to each segment.
-pub fn segmented(items: Vec<(ElementId, SharedString, bool)>, fill: bool) -> (gpui::Div, Vec<Stateful<gpui::Div>>) {
-    let wrap = div()
-        .flex()
-        .flex_none()
-        .when(fill, |d| d.w_full())
-        .h(px(32.))
-        .rounded(px(theme::RADIUS))
-        .border_1()
-        .border_color(theme::control_stroke())
-        .bg(theme::control())
-        .overflow_hidden();
-    let segments = items
-        .into_iter()
-        .enumerate()
-        .map(|(i, (id, text, selected))| {
-            div()
-                .id(id)
-                .tab_index(0)
-                .focus_visible(|s| s.border_2().border_color(theme::focus_stroke()))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(fill, |d| d.flex_1().min_w_0())
-                .px(px(12.))
-                .when(i > 0, |d| d.border_l_1().border_color(theme::control_stroke()))
-                .text_size(px(14.))
-                .line_height(px(20.))
-                .whitespace_nowrap()
-                .cursor_pointer()
-                .map(|d| {
-                    if selected {
-                        d.bg(theme::accent())
-                            .text_color(theme::accent_ink())
-                            .hover(|s| s.bg(theme::accent_hi()))
-                            .active(|s| s.bg(theme::accent_pressed()))
-                    } else {
-                        d.text_color(theme::text())
-                            .hover(|s| s.bg(theme::control_hover()))
-                            .active(|s| s.bg(theme::control_pressed()).text_color(theme::text_muted()))
-                    }
-                })
-                .child(text)
-                .on_mouse_down(MouseButton::Left, |_, _, _| sound::play(Sound::Click))
-        })
-        .collect();
-    (wrap, segments)
-}
-
 /// Called with the picked option's value.
 pub type OnPick = Rc<dyn Fn(&'static str, &mut Window, &mut App)>;
 
-/// ComboBox: a 32px box (at least 160 wide) that opens the options with the
-/// current one checked.
-pub fn combo_box(id: impl Into<ElementId>, current: String, options: &'static [Opt], selected: Option<&'static str>, on_pick: OnPick) -> AnyElement {
+/// Choices of 3 to 6 options are quality tiers (every game's list reads
+/// lowest to highest), so they get a level meter like a game's menu.
+fn tier_count(options: &[Opt]) -> Option<usize> {
+    (3..=6).contains(&options.len()).then_some(options.len())
+}
+
+/// A level meter: `count` short bars, the first `level + 1` lit.
+fn level_meter(level: Option<usize>, count: usize, lit: Rgba) -> gpui::Div {
+    div().flex().flex_none().items_end().gap(px(2.)).children((0..count).map(move |i| {
+        let on = level.is_some_and(|l| i <= l);
+        div()
+            .w(px(4.))
+            .h(px(6. + 6. * i as f32 / (count - 1).max(1) as f32))
+            .rounded(px(1.))
+            .bg(if on { lit } else { theme::control_stroke_bottom() })
+    }))
+}
+
+/// The select for every pick-one setting: a WinUI ComboBox face with the
+/// current value, a level meter for quality tiers and a chevron; clicking
+/// opens the options in the app's acrylic menu, the current one checked and
+/// each tier with its own meter. `fill` stretches it to the pane's width.
+pub fn select(id: impl Into<ElementId>, current: String, options: &'static [Opt], selected: Option<&'static str>, fill: bool, on_pick: OnPick, cx: &App) -> AnyElement {
+    use gpui_component::button::{ButtonCustomVariant, ButtonVariants as _};
+    let tiers = tier_count(options);
+    let level = selected.and_then(|v| options.iter().position(|o| o.value == v));
+    let face = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .child(div().flex_1().min_w_0().text_size(px(14.)).line_height(px(20.)).text_color(theme::text()).truncate().child(current))
+        .children(tiers.map(|count| level_meter(level, count, theme::accent())))
+        .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(theme::text_muted()));
     Button::new(id)
-        .outline()
-        .dropdown_caret(true)
-        .label(current)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(theme::control().into())
+                .foreground(theme::text().into())
+                .border(theme::control_stroke().into())
+                .hover(theme::control_hover().into())
+                .active(theme::control_pressed().into()),
+        )
+        .content_fill()
         .h(px(32.))
-        .min_w(px(160.))
+        .px(px(12.))
+        .map(|b| if fill { b.w_full() } else { b.w(px(220.)) })
+        .border_b_1()
+        .border_color(theme::control_stroke_bottom())
+        .child(face)
         .dropdown_menu(move |mut menu, _, _| {
-            for o in options {
+            for (i, o) in options.iter().enumerate() {
                 let pick = on_pick.clone();
                 let v = o.value;
-                menu = menu.item(PopupMenuItem::new(o.label).checked(selected == Some(o.value)).on_click(move |_, window, cx| pick(v, window, cx)));
+                let label = o.label;
+                menu = menu.item(
+                    PopupMenuItem::element(move |_, _| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(16.))
+                            .min_w(px(180.))
+                            .child(div().flex_1().text_size(px(14.)).child(label))
+                            .children(tiers.map(|count| level_meter(Some(i), count, theme::text_muted())))
+                    })
+                    .checked(selected == Some(o.value))
+                    .on_click(move |_, window, cx| {
+                        sound::play(Sound::Click);
+                        pick(v, window, cx)
+                    }),
+                );
             }
             menu
         })
@@ -823,13 +823,11 @@ mod tests {
     use crate::tweaks::opt;
 
     #[test]
-    fn short_choices_are_segmented() {
-        assert!(use_segmented(&[opt("0", "Low"), opt("1", "Medium"), opt("2", "High")]));
-        assert!(use_segmented(&[opt("0", "Low"), opt("1", "Medium"), opt("2", "High"), opt("3", "Ultra High")]));
-        // Five options, or a long label, make a ComboBox.
-        assert!(!use_segmented(&[opt("1", "Off"), opt("2", "2x"), opt("4", "4x"), opt("8", "8x"), opt("16", "16x")]));
-        assert!(!use_segmented(&[opt("a", "Classic outlines"), opt("b", "No outlines")]));
-        assert!(!use_segmented(&[opt("a", "Only")]));
+    fn tiers_get_a_meter() {
+        assert_eq!(tier_count(&[opt("0", "Low"), opt("1", "Medium"), opt("2", "High")]), Some(3));
+        // Two options (on/off-like) or long lists (resolutions) don't.
+        assert_eq!(tier_count(&[opt("a", "Classic outlines"), opt("b", "No outlines")]), None);
+        assert_eq!(tier_count(&[opt("1", "1"), opt("2", "2"), opt("3", "3"), opt("4", "4"), opt("5", "5"), opt("6", "6"), opt("7", "7")]), None);
     }
 
     #[test]

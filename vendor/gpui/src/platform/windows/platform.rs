@@ -261,6 +261,10 @@ impl WindowsPlatform {
                     let Some(all_windows) = all_windows.upgrade() else {
                         break;
                     };
+                    // Fork: idle windows sleep until something wants a frame.
+                    if !crate::window::FRAME_WANTED.load(std::sync::atomic::Ordering::Acquire) {
+                        continue;
+                    }
                     for hwnd in all_windows.read().iter() {
                         unsafe {
                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);

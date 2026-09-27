@@ -2611,7 +2611,10 @@ impl Interactivity {
                 || self.group_hover_style.is_some()
                 || self.active_style.is_some()
                 || self.group_active_style.is_some();
-            if reacts && !reduce_motion() {
+            // Only once hover is known (prepaint and paint): layout has no
+            // hitbox, so it would see "not hovered" and flip the target back
+            // every frame, keeping the fade in flight forever.
+            if reacts && !reduce_motion() && hitbox.is_some() {
                 let solid = |fill: &Fill| fill.color().filter(|c| c.tag == BackgroundTag::Solid);
                 let target = style
                     .background

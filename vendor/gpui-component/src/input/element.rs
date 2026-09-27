@@ -1454,6 +1454,14 @@ impl Element for TextElement {
         }
 
         self.state.update(cx, |state, cx| {
+            // Fork: notify only when something painted here actually moved.
+            // Upstream notified on every paint, which re-dirtied the window
+            // and repainted any page with a text box at the monitor's rate.
+            let changed = state.last_bounds != Some(bounds)
+                || state.last_cursor != Some(state.cursor())
+                || state.last_selected_range != Some(selected_range)
+                || state.scroll_size != prepaint.scroll_size
+                || state.input_bounds != input_bounds;
             state.last_layout = Some(prepaint.last_layout.clone());
             state.last_bounds = Some(bounds);
             state.last_cursor = Some(state.cursor());
@@ -1463,7 +1471,9 @@ impl Element for TextElement {
             state.update_scroll_offset(Some(prepaint.cursor_scroll_offset), cx);
             state.deferred_scroll_offset = None;
 
-            cx.notify();
+            if changed {
+                cx.notify();
+            }
         });
 
         if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref() {

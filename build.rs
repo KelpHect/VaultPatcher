@@ -4,6 +4,13 @@
 fn main() {
     println!("cargo:rerun-if-changed=assets/brand/logo.svg");
     println!("cargo:rerun-if-changed=assets/brand/logo-small.svg");
+    // gpui-component's tree-sitter JSON grammar marks its entry point
+    // dllexport, so MSVC would write an unused import library for the exe
+    // (and report it on every build).
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/NOIMPLIB");
+        println!("cargo:rustc-link-arg-bins=/NOEXP");
+    }
     #[cfg(windows)]
     {
         let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
