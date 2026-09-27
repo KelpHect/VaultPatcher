@@ -145,7 +145,8 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
     if let Some(dxvk) = def.component("dxvk") {
         match ws.component_status(dxvk) {
             Status::Active(_) => out.push(check(Level::Ok, "DXVK installed", "Vulkan renderer for steadier frame times.", None)),
-            Status::Blocked(reason) => out.push(check(Level::Info, "DXVK unavailable", reason, None)),
+            // Without the game, "Game not found" above already says why.
+            Status::Blocked(reason) if game.install.is_some() => out.push(check(Level::Info, "DXVK unavailable", reason, None)),
             _ => {}
         }
     }
@@ -153,7 +154,7 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
     if !game.pending.is_empty() {
         out.push(check(
             Level::Info,
-            format!("{} change(s) waiting", game.pending.len()),
+            format!("{} {} waiting", game.pending.len(), if game.pending.len() == 1 { "change" } else { "changes" }),
             "Nothing is written until you press Apply.",
             None,
         ));
@@ -168,10 +169,10 @@ pub fn checks(ws: &Workspace) -> Vec<Check> {
     if drifted + reverted > 0 {
         let mut parts = Vec::new();
         if drifted > 0 {
-            parts.push(format!("{drifted} setting(s)"));
+            parts.push(format!("{drifted} {}", if drifted == 1 { "setting" } else { "settings" }));
         }
         if reverted > 0 {
-            parts.push(format!("{reverted} exe patch(es)"));
+            parts.push(format!("{reverted} {}", if reverted == 1 { "exe patch" } else { "exe patches" }));
         }
         out.push(Check {
             level: Level::Warn,

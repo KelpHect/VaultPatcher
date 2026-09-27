@@ -3,13 +3,18 @@
 
 use gpui::{AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 
-use super::{game_banner, missing_notice, open_folder};
+use super::{clipped, clipped_caption, count, game_banner, missing_notice, open_folder};
 use crate::core::binpatch::PatchState;
 use crate::games::{PageKind, Support};
 use crate::health::Level;
 use crate::theme::{self, Icon};
 use crate::ui::{self, Variant};
 use crate::workspace::Workspace;
+
+/// Health and At a glance rows share one height so the two columns line up.
+/// (Title + caption, 36px, plus 8px padding above and below, rounded up to
+/// the grid.)
+const ROW_H: f32 = 56.;
 
 pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> AnyElement {
     let state = ws.read(cx);
@@ -68,10 +73,12 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             Level::Info => (Icon::Info, theme::echo()),
             Level::Ok => (Icon::CheckCircle, theme::success()),
         };
-        let fix = check.fixes.iter().enumerate().map(|(j, &(label, fix))| {
+        // The first check is always the install one; when the game is
+        // missing, the InfoBar above already offers "Locate game".
+        let fixes: &[_] = if i == 0 && game.install.is_none() { &[] } else { &check.fixes };
+        let fix = fixes.iter().enumerate().map(|(j, &(label, fix))| {
             let ws = ws.clone();
             ui::button(SharedString::from(format!("fix-{i}-{j}")), label, None, Variant::Secondary)
-                .h(px(28.))
                 .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.health_fix(fix, cx)))
         });
         health = health.when(i > 0, |d| d.child(ui::divider())).child(
@@ -79,8 +86,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .px(px(14.))
-                .py(px(9.))
+                .min_h(px(ROW_H))
+                .px(px(16.))
+                .py(px(8.))
                 .child(ui::icon(icon).text_color(color))
                 .child(
                     div()
@@ -88,8 +96,8 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(ui::title(check.title.clone()))
-                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(check.detail.clone())),
+                        .child(clipped(format!("hc-title-{i}"), check.title.clone()).text_size(px(14.)).line_height(px(20.)).text_color(theme::text()))
+                        .child(clipped_caption(format!("hc-detail-{i}"), check.detail.clone())),
                 )
                 .children(fix),
         );
@@ -109,19 +117,20 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let install_dir = game.install.as_ref().map(|i| i.root.clone());
     let stat = |id: &'static str, icon: Icon, value: String, label: &'static str, page: PageKind| {
         let ws = ws.clone();
-        div()
-            .id(id)
+        ui::focusable(div().id(id))
             .flex()
             .items_center()
             .gap(px(12.))
-            .px(px(14.))
-            .py(px(10.))
+            .min_h(px(ROW_H))
+            .px(px(16.))
+            .py(px(8.))
             .cursor_pointer()
             .hover(|s| s.bg(theme::panel_hi()))
-            .child(ui::icon(icon).text_color(theme::text_dim()))
-            .child(div().flex_1().text_size(px(14.)).text_color(theme::text_muted()).child(label))
-            .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(value))
-            .child(ui::icon(Icon::ChevronRight).size(px(14.)).text_color(theme::text_dim()))
+            .active(|s| s.bg(theme::panel_pressed()))
+            .child(ui::icon(icon).text_color(theme::text_muted()))
+            .child(div().flex_1().min_w_0().text_ellipsis().line_clamp(1).text_size(px(14.)).line_height(px(20.)).text_color(theme::text()).child(label))
+            .child(div().flex_none().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(value))
+            .child(ui::icon(Icon::ChevronRight).size(px(12.)).text_color(theme::text_muted()))
             .on_click(move |_, _, cx| ws.update(cx, |ws, cx| ws.navigate(page, cx)))
     };
     let first_settings = def.nav_items(state.mode()).find(|n| matches!(n.kind, PageKind::Tweaks(_))).map_or(PageKind::Presets, |n| n.kind);
@@ -130,7 +139,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
         .flex_col()
         .child(stat("g-settings", Icon::Sliders, format!("{modified} / {}", def.visible_tweaks().count()), "Settings changed from default", first_settings))
         .child(ui::divider())
-        .child(stat("g-waiting", Icon::Dashed, game.pending.len().to_string(), "Changes waiting to apply", first_settings));
+        .child(stat("g-waiting", Icon::Edit,game.pending.len().to_string(), "Changes waiting to apply", first_settings));
     if def.mods.is_some() {
         glance = glance
             .child(ui::divider())
@@ -171,7 +180,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                     .gap(px(8.))
                     .child(ui::section_title(
                         "Health",
-                        Some(if problems == 0 { "Everything looks good.".into() } else { format!("{problems} thing(s) to look at").into() }),
+                        Some(if problems == 0 { "Everything looks good.".into() } else { format!("{} to look at", count(problems, "thing", "things")).into() }),
                     ))
                     .child(health),
             )

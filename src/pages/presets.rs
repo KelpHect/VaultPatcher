@@ -1,11 +1,20 @@
 //! One-click bundles of settings, plus the user's own saved profiles.
 
-use gpui::{AnyElement, App, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 
-use super::page_header;
-use crate::theme;
+use super::{caption_style, clipped_with_tip, count, page_header};
+use crate::theme::{self, Rarity};
 use crate::ui::{self, Variant};
 use crate::workspace::Workspace;
+
+/// The rarity tag in plain words: how big a change the preset is.
+fn size_words(rarity: Rarity) -> &'static str {
+    match rarity {
+        Rarity::Common | Rarity::Uncommon => "a small change",
+        Rarity::Rare | Rarity::Epic => "a moderate change",
+        Rarity::Legendary | Rarity::Pearlescent | Rarity::Seraph => "a big change",
+    }
+}
 
 pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> AnyElement {
     let state = ws.read(cx);
@@ -15,7 +24,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     let mut list = ui::panel().flex().flex_col();
     for (i, preset) in def.presets.iter().enumerate() {
         let color = preset.rarity.color();
-        let count = if preset.values.is_empty() {
+        let settings = if preset.values.is_empty() {
             def.visible_tweaks().count()
         } else {
             preset.values.iter().filter(|(id, _)| def.tweak(id).is_some()).count()
@@ -33,32 +42,37 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             div()
                 .flex()
                 .items_center()
-                .gap(px(14.))
+                .gap(px(16.))
                 .px(px(16.))
                 .py(px(12.))
-                .child(div().w(px(3.)).h(px(40.)).flex_none().rounded_full().bg(color))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .gap(px(2.))
+                        .gap(px(4.))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(preset.name))
-                                .child(ui::badge(preset.rarity.label(), color))
+                                .child(ui::title(preset.name))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("preset-tag-{i}")))
+                                        .flex_none()
+                                        .tooltip(ui::tip(format!("{}: {}", preset.rarity.label(), size_words(preset.rarity))))
+                                        .child(ui::badge(preset.rarity.label(), color)),
+                                )
                                 .when(current, |d| d.child(ui::badge("Current", theme::success()))),
                         )
                         .child(ui::body(preset.description))
                         .when(!summary.is_empty(), |d| {
-                            d.child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(summary.join(" · ")))
+                            d.child(caption_style(clipped_with_tip(format!("preset-sum-{i}"), summary.join(" · "), summary.join("\n"))))
                         }),
                 )
-                .child(div().flex_none().text_size(px(12.)).text_color(theme::text_muted()).child(format!("{count} settings")))
+                .child(caption_style(div().flex_none()).child(count(settings, "setting", "settings")))
                 .child(
                     ui::button(SharedString::from(format!("preset-{}", preset.id)), "Load", None, Variant::Secondary)
                         .tooltip(ui::tip("Adds these values to your waiting changes; nothing is written until Apply"))
@@ -70,7 +84,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     div()
         .flex()
         .flex_col()
-        .gap(px(18.))
+        .gap(px(20.))
         .child(page_header(
             "Presets",
             "Load a bundle of settings, fine-tune, then Apply. Loading replaces any changes still waiting. The tag shows how big a change it is.",

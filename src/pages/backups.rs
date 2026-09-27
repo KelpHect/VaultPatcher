@@ -1,12 +1,9 @@
-//! Backup history: restore or delete snapshots. Named "History" in Simple
-//! mode, where it acts as the app's undo.
+//! Backup history: restore or delete snapshots. In Simple mode it doubles as
+//! the app's undo.
 
-use gpui::{
-    AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window,
-    div, prelude::*, px,
-};
+use gpui::{AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 
-use super::{confirm, open_folder, page_header};
+use super::{caption_style, clipped, confirm, friendly_now, open_folder, page_header};
 use crate::core::backup::{self, Backup};
 use crate::games::Mode;
 use crate::theme::{self, Icon};
@@ -67,13 +64,13 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
 
     let mut list = ui::panel().flex().flex_col();
     if groups.is_empty() {
-        list = list.child(div().p(px(20.)).child(ui::body(
+        list = list.child(div().px(px(16.)).py(px(20.)).child(ui::body(
             "Nothing here yet. Vault Patcher saves your files automatically before every change it makes.",
         )));
     }
     for (i, (b, repeats)) in groups.into_iter().enumerate() {
         if i > 0 {
-            list = list.child(div().h(px(1.)).bg(theme::line()));
+            list = list.child(ui::divider());
         }
         let original = b.label == backup::ORIGINAL_LABEL;
         let restore_ws = ws.clone();
@@ -87,8 +84,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 .flex()
                 .items_center()
                 .gap(px(12.))
+                .min_h(px(56.))
                 .px(px(16.))
-                .py(px(10.))
+                .py(px(8.))
                 .child(
                     ui::icon(if original { Icon::Star } else { Icon::History })
                         .text_color(if original { theme::accent_text() } else { theme::text_muted() }),
@@ -99,27 +97,34 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .gap(px(3.))
                         .child(
                             div()
                                 .flex()
-                                .gap(px(10.))
+                                .gap(px(8.))
                                 .items_baseline()
-                                .child(ui::title(b.label.clone()))
-                                .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(b.created_at.clone()))
+                                .min_w_0()
+                                // Labels are short; a long one wraps.
+                                .child(div().min_w_0().child(ui::title(b.label.clone())))
+                                .child(
+                                    caption_style(div().id(SharedString::from(format!("bk-time-{i}"))).flex_none())
+                                        .tooltip(ui::tip(b.created_at.clone()))
+                                        .child(friendly_now(&b.created_at)),
+                                )
                                 .when(repeats > 1, |d| {
                                     d.child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(theme::text_muted())
-                                            .child(format!("· newest of {repeats}")),
+                                        caption_style(div().id(SharedString::from(format!("bk-similar-{i}"))).flex_none())
+                                            .tooltip(ui::tip("Older backups of the same action are grouped here; this row restores the newest"))
+                                            .child(format!("({repeats} similar)")),
                                     )
                                 }),
                         )
-                        .child(div().text_size(px(12.)).text_color(theme::text_muted()).truncate().child(file_list(b))),
+                        .child(caption_style(clipped(format!("bk-files-{i}"), file_list(b)))),
                 )
+                // A quiet (subtle) button: a page of equal-weight Standard
+                // buttons read as a wall of calls to action.
                 .child(
-                    ui::button(SharedString::from(format!("bk-restore-{i}")), "Restore", Some(Icon::Undo), Variant::Secondary)
+                    ui::button(SharedString::from(format!("bk-restore-{i}")), "Restore", Some(Icon::Undo), Variant::Ghost)
+                        .tooltip(ui::tip("Put these files back (the current ones are backed up first)"))
                         .on_click(move |_, window, cx| {
                             let ws = restore_ws.clone();
                             let dir = restore_dir.clone();
@@ -133,34 +138,43 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                             );
                         }),
                 )
-                .when(!original, |d| {
-                    d.child(
-                        ui::icon_button(SharedString::from(format!("bk-del-{i}")), Icon::Delete, theme::text_dim())
-                            .tooltip(ui::tip("Delete this backup"))
-                            .on_click(move |_, window, cx| {
-                                let ws = delete_ws.clone();
-                                let dir = delete_dir.clone();
-                                confirm(
-                                    window,
-                                    cx,
-                                    &format!("Delete the backup \"{delete_label}\"?"),
-                                    "This can't be undone.",
-                                    "Delete",
-                                    move |cx| ws.update(cx, |ws, cx| ws.delete_backup(dir, cx)),
-                                );
-                            }),
-                    )
+                .child(if original {
+                    ui::icon_button_if(false, SharedString::from(format!("bk-del-{i}")), Icon::Delete, theme::text_muted())
+                        .tooltip(ui::tip("Your original settings are always kept"))
+                        .into_any_element()
+                } else {
+                    ui::icon_button(SharedString::from(format!("bk-del-{i}")), Icon::Delete, theme::text_muted())
+                        .tooltip(ui::tip("Delete this backup"))
+                        .on_click(move |_, window, cx| {
+                            let ws = delete_ws.clone();
+                            let dir = delete_dir.clone();
+                            confirm(
+                                window,
+                                cx,
+                                &format!("Delete the backup \"{delete_label}\"?"),
+                                "This can't be undone.",
+                                "Delete",
+                                move |cx| ws.update(cx, |ws, cx| ws.delete_backup(dir, cx)),
+                            );
+                        })
+                        .into_any_element()
                 }),
         );
     }
 
+    // The page is titled like its nav item in both modes; Simple mode's
+    // subtitle says it is the undo history.
     div()
         .flex()
         .flex_col()
         .gap(px(20.))
         .child(page_header(
-            if simple { "History" } else { "Backups" },
-            "Every change Vault Patcher makes is backed up first. Your original settings are kept forever; restoring anything backs up the current files first.",
+            "Backups",
+            if simple {
+                "Your undo history. Every change Vault Patcher makes is backed up first, and your original settings are kept forever. Restoring anything backs up the current files first."
+            } else {
+                "Every change Vault Patcher makes is backed up first. Your original settings are kept forever; restoring anything backs up the current files first."
+            },
             actions,
         ))
         .child(list)
