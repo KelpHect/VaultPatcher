@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="128" alt="Vaulter logo: a cel-shaded orange vault door with a loot gem at its core">
+  <img src="https://raw.githubusercontent.com/RusticStack/Vaulter/master/assets/brand/logo.png" width="128" alt="Vaulter logo: a cel-shaded orange vault door with a loot gem at its core">
 </p>
 
 <h1 align="center">Vault Patcher is now Vaulter</h1>
@@ -14,7 +14,7 @@ Same app, same data (it moves over automatically), now developed at RusticStack.
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" width="720" alt="Vaulter demo">
+  <img src="https://raw.githubusercontent.com/RusticStack/Vaulter/master/assets/demo.gif" width="720" alt="Vaulter demo">
 </p>
 
 This repository is kept only so old links keep working. The code, issues and all new releases
