@@ -777,13 +777,14 @@ pub struct Assets;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets/brand"]
-#[include = "*.svg"]
+#[include = "*.png"]
+#[exclude = "source/*"]
 struct Brand;
 
-/// The app logo (full colour), for `img()`.
-pub const LOGO: &str = "brand/logo.svg";
-/// Simplified logo for small sizes (title bar).
-pub const LOGO_SMALL: &str = "brand/logo-small.svg";
+/// The app logo (256px, rendered from `assets/brand/source/logo.py`), for `img()`.
+pub const LOGO: &str = "brand/logo.png";
+/// The small-size render (no hatching, heavier ink) for 32px and below.
+pub const LOGO_SMALL: &str = "brand/logo-small.png";
 
 impl gpui::AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {

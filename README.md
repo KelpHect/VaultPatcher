@@ -1,4 +1,4 @@
-<img src="assets/brand/logo.svg" width="96" alt="Vault Patcher logo: a bolted vault door with a glowing orange loot gem at its core">
+<img src="assets/brand/logo.png" width="96" alt="Vault Patcher logo: a cel-shaded orange vault door with a loot gem at its core">
 
 # Vault Patcher
 
@@ -135,8 +135,10 @@ cargo test -- --ignored --nocapture   # read-only checks against a local BL2 ins
 
 `cargo build --release` produces one self-contained `VaultPatcher.exe`: fonts, icons, the
 logo and the comparison images are embedded, the C runtime is linked statically
-(`.cargo/config.toml`), and the app icon is rendered from `assets/brand/logo.svg` at build
-time. Everything else (mods, DXVK) is downloaded to the user's PC on demand.
+(`.cargo/config.toml`), and the app icon is scaled at build time from
+`assets/brand/logo.png`, which Blender renders from `assets/brand/source/logo.py`
+(`blender -b --python assets/brand/source/logo.py -- logo.png 1024`). Everything else
+(mods, DXVK) is downloaded to the user's PC on demand.
 
 Requires Windows 10/11; Mica needs Windows 11 22H2 or later (earlier versions get a solid
 background). Text uses the system Segoe UI Variable (Segoe UI on Windows 10) and icons are
