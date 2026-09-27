@@ -515,6 +515,8 @@ pub struct SliderSpec {
     /// Where the game's default sits: a dot under the rail, the magnet while
     /// dragging, and what double-click / Delete reset to.
     pub default: Option<f32>,
+    /// A recommended stretch of the rail (fractions), tinted with the accent.
+    pub recommended: Option<(f32, f32)>,
     pub accent: Rgba,
 }
 
@@ -541,7 +543,7 @@ pub fn slider(
     format: impl Fn(f32) -> SharedString + 'static,
     on_commit: impl Fn(f32, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let SliderSpec { id, fraction, steps, default, accent } = spec;
+    let SliderSpec { id, fraction, steps, default, recommended, accent } = spec;
     let steps = steps.filter(|s| *s > 0);
     let snap = move |f: f32| -> f32 {
         let f = f.clamp(0., 1.);
@@ -634,6 +636,20 @@ pub fn slider(
                 .h(px(4.))
                 .rounded(px(2.))
                 .bg(theme::ink())
+                .when_some(recommended, |d, (lo, hi)| {
+                    let (lo, hi) = (lo.clamp(0., 1.), hi.clamp(0., 1.));
+                    d.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .h_full()
+                            .left(relative(lo))
+                            .w(relative((hi - lo).max(0.)))
+                            .min_w(px(4.))
+                            .rounded(px(2.))
+                            .bg(theme::with_alpha(accent, 0.24)),
+                    )
+                })
                 .child(div().h_full().rounded(px(2.)).w(relative(shown)).bg(accent)),
         )
         .children(ticks)

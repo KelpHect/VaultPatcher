@@ -9,6 +9,7 @@ mod app;
 mod applied;
 mod cli;
 mod compare;
+mod controls;
 mod core;
 mod games;
 mod mods;
