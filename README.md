@@ -1,4 +1,4 @@
-<img src="assets/brand/logo.svg" width="96" alt="Vault Patcher logo: an Eridian Vault arch holding an Eridium crystal">
+<img src="assets/brand/logo.svg" width="96" alt="Vault Patcher logo: a bolted vault door with a glowing orange loot gem at its core">
 
 # Vault Patcher
 

@@ -1,5 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <rect x="0" y="0" width="256" height="256" rx="56" fill="#FFC20E"/>
-  <path d="M34 232 L50 222 C52 116 84 36 128 32 C172 36 204 116 206 222 L222 232 L168 232 L170 216 C168 138 152 92 128 90 C104 92 88 138 86 216 L88 232 Z" fill="#15161A"/>
-  <path d="M128 118 L160 170 L128 222 L96 170 Z" fill="#A53CF5" stroke="#15161A" stroke-width="8" stroke-linejoin="round"/>
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8A3D"/>
+      <stop offset="1" stop-color="#E11D48"/>
+    </linearGradient>
+    <linearGradient id="gem" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FFB27A"/>
+      <stop offset="0.5" stop-color="#FF6A13"/>
+      <stop offset="1" stop-color="#BE123C"/>
+    </linearGradient>
+  </defs>
+  <rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(0 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(45 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(90 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(135 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(180 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(225 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(270 128 128)"/><rect x="110" y="4" width="36" height="44" rx="9" fill="#6E6E7A" stroke="#0C0C0E" stroke-width="6" transform="rotate(315 128 128)"/>
+  <circle cx="128" cy="128" r="100" fill="#2E2E35" stroke="#0C0C0E" stroke-width="8"/>
+  <circle cx="128" cy="128" r="74" fill="#121214" stroke="url(#ring)" stroke-width="22"/>
+  <path d="M128 74 L164 104 L154 156 L128 184 L102 156 L92 104 Z" fill="url(#gem)" stroke="#0C0C0E" stroke-width="7" stroke-linejoin="round"/>
 </svg>
