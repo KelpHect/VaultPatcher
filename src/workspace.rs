@@ -217,6 +217,9 @@ pub struct GameState {
     running_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
     /// The same, for the game's own launcher.
     launcher_cache: std::cell::Cell<Option<(std::time::Instant, bool)>>,
+    /// The launcher exe, when the game has one and it's there (found on
+    /// refresh, so rendering never touches the disk for it).
+    launcher_file: Option<PathBuf>,
     /// Saved profiles, re-read when they change.
     pub profiles: Vec<crate::profiles::Entry>,
     /// What Vault Patcher last wrote, for "Re-apply" (see `applied.rs`).
@@ -240,6 +243,7 @@ impl GameState {
             status_cache: Default::default(),
             running_cache: Default::default(),
             launcher_cache: Default::default(),
+            launcher_file: None,
             profiles: crate::profiles::list(def.id),
             applied: crate::applied::load(def.id),
         }
@@ -249,11 +253,21 @@ impl GameState {
         self.status_cache.borrow_mut().clear();
     }
 
-    /// True while the game's exe is running (it rewrites its ini files on
-    /// exit, and its exe/DLLs are locked).
+    /// Whether the game was running at the last check, for display. Never
+    /// touches the process list: the running watch refreshes it off the UI
+    /// thread, so rendering stays cheap. Use [`Self::is_running_now`]
+    /// before writing files.
     pub fn is_running(&self) -> bool {
-        // Rendering asks often; the process list only needs checking every
-        // couple of seconds.
+        match self.running_cache.get() {
+            Some((_, running)) => running,
+            None => self.is_running_now(),
+        }
+    }
+
+    /// True while the game's exe is running (it rewrites its ini files on
+    /// exit, and its exe/DLLs are locked). Takes a process snapshot unless
+    /// one is under two seconds old.
+    pub fn is_running_now(&self) -> bool {
         if let Some((at, running)) = self.running_cache.get()
             && at.elapsed() < Duration::from_secs(2)
         {
@@ -270,10 +284,10 @@ impl GameState {
         self.running_cache.set(Some((std::time::Instant::now(), running)));
     }
 
-    /// The game's own launcher program, when it has one and it's there.
+    /// The game's own launcher program, when it has one and it was there at
+    /// the last refresh.
     pub fn launcher_path(&self) -> Option<PathBuf> {
-        let launcher = self.def.launcher?;
-        self.install.as_ref().map(|i| i.root.join(launcher.exe)).filter(|p| p.is_file())
+        self.launcher_file.clone()
     }
 
     /// True while the game's launcher is open: it pushes its own copy of
@@ -293,7 +307,7 @@ impl GameState {
     /// Why the game's settings can't be written right now, if they can't:
     /// the game or its launcher is open and would overwrite them.
     pub fn write_blocker(&self) -> Option<String> {
-        if self.is_running() {
+        if self.is_running_now() {
             Some(format!("{} is running — close it first, or it will overwrite these settings when it exits", self.def.name))
         } else if self.launcher_running() {
             Some(format!("The {} launcher is open — close it first, or it will put its own video settings back", self.def.short))
@@ -422,7 +436,7 @@ impl Workspace {
         for i in 0..ws.games.len() {
             ws.refresh_game(i);
         }
-        ws.run_watch.reset(ws.game().is_running());
+        ws.run_watch.reset(ws.game().is_running_now());
         ws.fetch_comparison_packs(cx);
         ws.check_updates(cx);
         let probe = cx.background_executor().spawn(async { crate::core::gpu::dxvk_ready().is_ok() });
@@ -491,7 +505,7 @@ impl Workspace {
             if self.active != index {
                 crate::sound::play(crate::sound::Sound::Whoosh);
                 // The running watch follows the newly selected game.
-                if self.run_watch.reset(self.games[index].is_running()) {
+                if self.run_watch.reset(self.games[index].is_running_now()) {
                     self.apply_run_audio();
                 }
             }
@@ -585,6 +599,10 @@ impl Workspace {
             })
             .or_else(|| detect::detect(&def.detect_spec()));
         game.art = crate::core::art::find(def.id, def.steam_app_ids, game.exe_path().as_deref());
+        game.launcher_file = def
+            .launcher
+            .and_then(|l| game.install.as_ref().map(|i| i.root.join(l.exe)))
+            .filter(|p| p.is_file());
 
         game.config_dir = settings
             .manual_config_dirs
@@ -1263,7 +1281,7 @@ impl Workspace {
     /// it would half-load a changing mod setup).
     fn mods_blocker(&self) -> Option<String> {
         self.job_blocker().map(str::to_string).or_else(|| {
-            self.game().is_running().then(|| format!("{} is running \u{2014} close it first", self.game().def.name))
+            self.game().is_running_now().then(|| format!("{} is running \u{2014} close it first", self.game().def.name))
         })
     }
 
@@ -1606,7 +1624,7 @@ impl Workspace {
         let game = &self.games[gi];
         let def = game.def;
         let path = game.exe_path().filter(|p| p.is_file()).context("game install not found")?;
-        if game.is_running() {
+        if game.is_running_now() {
             return Err(anyhow!("{} is running — close it first", def.name));
         }
         let mut bytes = patches::read_exe(&path).context("reading the exe")?;
@@ -1642,7 +1660,7 @@ impl Workspace {
         let def = self.games[gi].def;
         let root = self.games[gi].install.as_ref().map(|i| i.root.clone());
         let touches_game = !matches!(component.kind, ComponentKind::LaunchArg(_));
-        if touches_game && self.games[gi].is_running() {
+        if touches_game && self.games[gi].is_running_now() {
             return Err(anyhow!("{} is running — close it first", def.name));
         }
         let need_root = || root.clone().context("game install not found");
@@ -1804,7 +1822,7 @@ impl Workspace {
     pub fn set_exe_patch(&mut self, patch_id: &str, enabled: bool, cx: &mut Context<Self>) {
         let result = (|| -> Result<()> {
             let game = self.game();
-            if game.is_running() {
+            if game.is_running_now() {
                 return Err(anyhow!("{} is running — close it first", game.def.name));
             }
             let path = game.exe_path().context("game install not found")?;
@@ -2498,15 +2516,106 @@ fn scan_exe(def: &GameDef, path: &std::path::Path) -> Option<ExeInfo> {
     if let Some((_, info)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
         return Some(info.clone());
     }
-    let bytes = patches::read_exe(path).ok()?;
-    let info = ExeInfo {
-        size: bytes.len() as u64,
-        patch_states: def.patches.iter().map(|p| (p.id, p.state(&bytes))).collect(),
+    // A previous launch may have scanned this exact exe already.
+    let info = match exe_scan_store::load(def, &key.0, key.1, key.2) {
+        Some(info) => info,
+        None => {
+            let bytes = patches::read_exe(path).ok()?;
+            let info = ExeInfo {
+                size: bytes.len() as u64,
+                patch_states: def.patches.iter().map(|p| (p.id, p.state(&bytes))).collect(),
+            };
+            exe_scan_store::save(&key.0, key.1, key.2, &info);
+            info
+        }
     };
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|(k, _)| k.0 != key.0);
     cache.push((key, info.clone()));
     Some(info)
+}
+
+/// Exe scan results kept on disk (`exe-scan.json`), keyed by path, size and
+/// modification time, so a launch doesn't re-read a 27 MB exe that hasn't
+/// changed. Anything unreadable or stale is simply scanned again.
+mod exe_scan_store {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::ExeInfo;
+    use crate::core::binpatch::PatchState;
+    use crate::games::GameDef;
+
+    #[derive(Serialize, Deserialize, Default)]
+    struct Store {
+        entries: Vec<Entry>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct Entry {
+        path: PathBuf,
+        len: u64,
+        /// Modification time in nanoseconds since the epoch.
+        modified: Option<u128>,
+        states: HashMap<String, String>,
+    }
+
+    fn file() -> PathBuf {
+        crate::core::backup::data_dir().join("exe-scan.json")
+    }
+
+    fn nanos(t: Option<SystemTime>) -> Option<u128> {
+        t.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_nanos())
+    }
+
+    fn state_name(s: PatchState) -> &'static str {
+        match s {
+            PatchState::Unpatched => "unpatched",
+            PatchState::Patched => "patched",
+            PatchState::Unsupported => "unsupported",
+        }
+    }
+
+    fn read() -> Store {
+        std::fs::read(file()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    pub(super) fn load(def: &GameDef, path: &Path, len: u64, modified: Option<SystemTime>) -> Option<ExeInfo> {
+        let modified = nanos(modified)?;
+        let store = read();
+        let entry = store.entries.iter().find(|e| e.path == path && e.len == len && e.modified == Some(modified))?;
+        // Every patch this build knows must have a remembered state.
+        let mut patch_states = HashMap::new();
+        for patch in def.patches {
+            let state = match entry.states.get(patch.id)?.as_str() {
+                "unpatched" => PatchState::Unpatched,
+                "patched" => PatchState::Patched,
+                "unsupported" => PatchState::Unsupported,
+                _ => return None,
+            };
+            patch_states.insert(patch.id, state);
+        }
+        Some(ExeInfo { size: len, patch_states })
+    }
+
+    pub(super) fn save(path: &Path, len: u64, modified: Option<SystemTime>, info: &ExeInfo) {
+        let Some(modified) = nanos(modified) else { return };
+        let mut store = read();
+        store.entries.retain(|e| e.path != path);
+        store.entries.push(Entry {
+            path: path.to_path_buf(),
+            len,
+            modified: Some(modified),
+            states: info.patch_states.iter().map(|(k, v)| (k.to_string(), state_name(*v).to_string())).collect(),
+        });
+        if let Ok(bytes) = serde_json::to_vec_pretty(&store) {
+            let _ = std::fs::create_dir_all(crate::core::backup::data_dir());
+            let _ = crate::core::atomic::write(&file(), &bytes);
+        }
+    }
 }
 
 /// Work for one setup step.

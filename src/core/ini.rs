@@ -55,6 +55,10 @@ pub struct IniDoc {
     encoding: Encoding,
     newline: &'static str,
     trailing_newline: bool,
+    /// Line numbers of each (section, key), lowercased, in file order. Built
+    /// on first lookup and dropped by every edit, so reads are O(1) instead
+    /// of scanning a 2,000-line file per setting.
+    index: std::cell::OnceCell<std::collections::HashMap<(String, String), Vec<usize>>>,
 }
 
 impl Default for IniDoc {
@@ -64,6 +68,7 @@ impl Default for IniDoc {
             encoding: Encoding::Utf8,
             newline: "\r\n",
             trailing_newline: true,
+            index: Default::default(),
         }
     }
 }
@@ -109,6 +114,7 @@ impl IniDoc {
             encoding: Encoding::Utf8,
             newline,
             trailing_newline,
+            index: Default::default(),
         }
     }
 
@@ -200,18 +206,26 @@ impl IniDoc {
     }
 
     fn entry_indices(&self, section: &str, key: &str) -> Vec<usize> {
-        let mut out = Vec::new();
-        for (start, end) in self.section_ranges(section) {
-            for i in start + 1..end {
-                if let Line::Entry { key: k, .. } = &self.lines[i] {
-                    let (op, bare) = split_op(k);
-                    if matches!(op, None | Some('+') | Some('.')) && bare.eq_ignore_ascii_case(key) {
-                        out.push(i);
+        let index = self.index.get_or_init(|| {
+            let mut index: std::collections::HashMap<(String, String), Vec<usize>> = Default::default();
+            let mut current: Option<String> = None;
+            for (i, line) in self.lines.iter().enumerate() {
+                match line {
+                    Line::Section { name, .. } => current = Some(name.to_ascii_lowercase()),
+                    Line::Entry { key: k, .. } => {
+                        let (op, bare) = split_op(k);
+                        if let Some(section) = &current
+                            && matches!(op, None | Some('+') | Some('.'))
+                        {
+                            index.entry((section.clone(), bare.to_ascii_lowercase())).or_default().push(i);
+                        }
                     }
+                    _ => {}
                 }
             }
-        }
-        out
+            index
+        });
+        index.get(&(section.to_ascii_lowercase(), key.to_ascii_lowercase())).cloned().unwrap_or_default()
     }
 
     /// Last value wins, matching how UE3 resolves a repeated scalar key.
@@ -236,6 +250,7 @@ impl IniDoc {
     /// earlier duplicates, or appends the key to the section (creating the
     /// section at the end of the file if needed).
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
+        self.index.take();
         let indices = self.entry_indices(section, key);
         if let Some((&last, earlier)) = indices.split_last() {
             if let Line::Entry { value: v, .. } = &mut self.lines[last] {
@@ -245,16 +260,19 @@ impl IniDoc {
             }
             for &i in earlier.iter().rev() {
                 self.lines.remove(i);
+                self.index.take();
             }
             return;
         }
         let at = self.insertion_point(section);
         self.lines.insert(at, Line::entry(key, value));
+        self.index.take();
     }
 
     /// Replaces every value of an array key with `values`, keeping them where
     /// the first old value was so the file layout stays familiar.
     pub fn set_all(&mut self, section: &str, key: &str, values: &[&str]) {
+        self.index.take();
         let indices = self.entry_indices(section, key);
         let at = match indices.first() {
             Some(&first) => first,
@@ -262,28 +280,34 @@ impl IniDoc {
         };
         for &i in indices.iter().rev() {
             self.lines.remove(i);
+            self.index.take();
         }
         for (n, value) in values.iter().enumerate() {
             self.lines.insert(at + n, Line::entry(key, value));
+            self.index.take();
         }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn remove(&mut self, section: &str, key: &str) -> usize {
+        self.index.take();
         let indices = self.entry_indices(section, key);
         for &i in indices.iter().rev() {
             self.lines.remove(i);
+            self.index.take();
         }
         indices.len()
     }
 
     /// Removes one specific `key=value` pair from an array key.
     pub fn remove_value(&mut self, section: &str, key: &str, value: &str) -> bool {
+        self.index.take();
         let found = self.entry_indices(section, key).into_iter().rev().find(|&i| {
             matches!(&self.lines[i], Line::Entry { value: v, .. } if v.trim().eq_ignore_ascii_case(value))
         });
         if let Some(i) = found {
             self.lines.remove(i);
+            self.index.take();
         }
         found.is_some()
     }
@@ -295,6 +319,7 @@ impl IniDoc {
 
     /// Removes every value of an array key accepted by `pred`; returns how many.
     pub fn remove_values_where(&mut self, section: &str, key: &str, pred: impl Fn(&str) -> bool) -> usize {
+        self.index.take();
         let doomed: Vec<usize> = self
             .entry_indices(section, key)
             .into_iter()
@@ -302,12 +327,14 @@ impl IniDoc {
             .collect();
         for &i in doomed.iter().rev() {
             self.lines.remove(i);
+            self.index.take();
         }
         doomed.len()
     }
 
     /// Adds `key=value` to the end of the section unless already present.
     pub fn add_value(&mut self, section: &str, key: &str, value: &str) {
+        self.index.take();
         let exists = self
             .get_all(section, key)
             .iter()
@@ -315,12 +342,14 @@ impl IniDoc {
         if !exists {
             let at = self.insertion_point(section);
             self.lines.insert(at, Line::entry(key, value));
+            self.index.take();
         }
     }
 
     /// Where a new key for `section` belongs: after the last non-blank line of
     /// its final occurrence, so blank separator lines stay between sections.
     fn insertion_point(&mut self, section: &str) -> usize {
+        self.index.take();
         if let Some(&(start, end)) = self.section_ranges(section).last() {
             let mut at = end;
             while at > start + 1 {
@@ -334,11 +363,14 @@ impl IniDoc {
         if let Some(Line::Other(raw)) = self.lines.last() {
             if !raw.trim().is_empty() {
                 self.lines.push(Line::Other(String::new()));
+                self.index.take();
             }
         } else if !self.lines.is_empty() {
             self.lines.push(Line::Other(String::new()));
+            self.index.take();
         }
         self.lines.push(Line::Section { name: section.to_string(), raw: format!("[{section}]") });
+        self.index.take();
         self.lines.len()
     }
 }

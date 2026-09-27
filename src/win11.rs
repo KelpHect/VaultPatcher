@@ -134,6 +134,15 @@ fn icon_font() -> Option<&'static [u8]> {
 /// One glyph of the system icon font as a standalone SVG (the font's 2048
 /// em square is the icon canvas), or None when the font or glyph is missing.
 pub fn glyph_svg(codepoint: char) -> Option<Vec<u8>> {
+    // Built once per glyph: the atlas asks again for every new size.
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static MEMO: Mutex<Option<HashMap<char, Option<Vec<u8>>>>> = Mutex::new(None);
+    let mut memo = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    memo.get_or_insert_with(HashMap::new).entry(codepoint).or_insert_with(|| build_glyph_svg(codepoint)).clone()
+}
+
+fn build_glyph_svg(codepoint: char) -> Option<Vec<u8>> {
     let face = ttf_parser::Face::parse(icon_font()?, 0).ok()?;
     let glyph = face.glyph_index(codepoint)?;
     let em = f32::from(face.units_per_em());

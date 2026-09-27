@@ -675,10 +675,21 @@ impl Icon {
 
     /// Asset path the SVG pipeline loads (served by [`Assets`]).
     pub fn path(self) -> SharedString {
-        match self.fallback() {
-            Some(f) => format!("fluent/{:04X}-{:04X}.svg", self.glyph() as u32, f as u32).into(),
-            None => format!("fluent/{:04X}.svg", self.glyph() as u32).into(),
-        }
+        // Rendering asks for icon paths constantly; build each string once.
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        type Paths = HashMap<(char, Option<char>), SharedString>;
+        static PATHS: Mutex<Option<Paths>> = Mutex::new(None);
+        let key = (self.glyph(), self.fallback());
+        let mut paths = PATHS.lock().unwrap_or_else(|e| e.into_inner());
+        paths
+            .get_or_insert_with(HashMap::new)
+            .entry(key)
+            .or_insert_with(|| match key.1 {
+                Some(f) => format!("fluent/{:04X}-{:04X}.svg", key.0 as u32, f as u32).into(),
+                None => format!("fluent/{:04X}.svg", key.0 as u32).into(),
+            })
+            .clone()
     }
 }
 

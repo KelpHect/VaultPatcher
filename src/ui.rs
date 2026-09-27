@@ -902,35 +902,28 @@ pub fn progress_bar(id: impl Into<SharedString>, fraction: Option<f32>, color: R
     }
 }
 
-/// Indeterminate ProgressRing: an accent arc that grows, shrinks and spins.
-pub fn progress_ring(id: impl Into<SharedString>, size: f32) -> AnyElement {
-    let id: SharedString = id.into();
+/// One frame of the indeterminate ProgressRing at cycle position `t`
+/// (0..1), for views that drive it on their own timer.
+pub fn progress_ring_frame(size: f32, t: f32) -> gpui::Div {
     let color = theme::accent();
     let stroke = (size / 8.).max(2.);
-    let ring = div().size(px(size)).flex_none();
-    if !theme::motion() {
-        return ring.child(icon(Icon::Loader).size(px(size)).text_color(color)).into_any_element();
-    }
-    ring.with_animation(ElementId::Name(id), Animation::new(Duration::from_millis(2000)).repeat(), move |d, t| {
-        d.child(
-            canvas(|_, _, _| {}, move |bounds, _, window, _| {
-                let r = (bounds.size.width.min(bounds.size.height) - px(stroke)) / 2.;
-                let c = bounds.center();
-                let sweep = 0.1 + 0.6 * (std::f32::consts::PI * t).sin();
-                let start = std::f32::consts::TAU * (t * 1.5);
-                let end = start + std::f32::consts::TAU * sweep;
-                let at = |a: f32| point(c.x + r * a.cos(), c.y + r * a.sin());
-                let mut path = PathBuilder::stroke(px(stroke));
-                path.move_to(at(start));
-                path.arc_to(point(r, r), px(0.), sweep > 0.5, true, at(end));
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, color);
-                }
-            })
-            .size_full(),
-        )
-    })
-    .into_any_element()
+    div().size(px(size)).flex_none().child(
+        canvas(|_, _, _| {}, move |bounds, _, window, _| {
+            let r = (bounds.size.width.min(bounds.size.height) - px(stroke)) / 2.;
+            let c = bounds.center();
+            let sweep = 0.1 + 0.6 * (std::f32::consts::PI * t).sin();
+            let start = std::f32::consts::TAU * (t * 1.5);
+            let end = start + std::f32::consts::TAU * sweep;
+            let at = |a: f32| point(c.x + r * a.cos(), c.y + r * a.sin());
+            let mut path = PathBuilder::stroke(px(stroke));
+            path.move_to(at(start));
+            path.arc_to(point(r, r), px(0.), sweep > 0.5, true, at(end));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        })
+        .size_full(),
+    )
 }
 
 /// Heading above a group of cards (Body Strong, optional caption).

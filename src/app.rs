@@ -29,6 +29,10 @@ const PANE: f32 = 280.;
 
 pub struct Shell {
     ws: Entity<Workspace>,
+    /// The page area, rendered as a cached view.
+    page_host: Entity<PageHost>,
+    /// The status bar's busy spinner, while something runs in the background.
+    spinner: Option<Entity<BusySpinner>>,
     focus: gpui::FocusHandle,
     /// Pages visited in this game and mode, for the back button.
     history: Vec<PageKind>,
@@ -51,6 +55,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let ws = cx.new(Workspace::new);
+        let page_host = cx.new(|cx| PageHost::new(ws.clone(), cx));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings  (Ctrl+F)"));
         let profile = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
         let search_ws = ws.clone();
@@ -72,14 +77,16 @@ impl Shell {
                 let active = window.is_window_active();
                 if active && theme::sync() {
                     theme::apply(cx);
+                    this.page_host.update(cx, |_, cx| cx.notify());
                 }
                 this.ws.update(cx, |ws, cx| ws.window_activation_changed(active, cx));
                 cx.notify();
             }),
             // Windows switched between light and dark.
-            cx.observe_window_appearance(window, |_, _, cx| {
+            cx.observe_window_appearance(window, |this, _, cx| {
                 if theme::sync() {
                     theme::apply(cx);
+                    this.page_host.update(cx, |_, cx| cx.notify());
                 }
                 cx.notify();
             }),
@@ -89,7 +96,7 @@ impl Shell {
             ws.search_input = Some(search);
             ws.profile_input = Some(profile);
         });
-        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, narrow: false, nav_focus: Default::default(), _subs: subs }
+        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, narrow: false, nav_focus: Default::default(), page_host, spinner: None, _subs: subs }
     }
 
     /// Tracks page changes for the back button. Switching game or mode starts
@@ -412,11 +419,7 @@ impl Shell {
         // This game ships a separate launcher (BL2/TPS): the menu offers ways
         // around it. "Through the launcher" additionally needs the file there.
         let launcher_known = game.def.launcher.is_some();
-        let launcher_exists = game
-            .def
-            .launcher
-            .and_then(|l| game.install.as_ref().map(|i| i.root.join(l.exe)))
-            .is_some_and(|p| p.is_file());
+        let launcher_exists = game.launcher_path().is_some();
         let menu_ws = self.ws.clone();
         let reapply_ws = self.ws.clone();
         let current_mode = state.launch_mode();
@@ -672,8 +675,8 @@ impl Shell {
 
     // ---- bottom bars --------------------------------------------------------------
 
-    fn pending_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let state = self.ws.read(cx);
+    fn pending_bar(ws: &Entity<Workspace>, cx: &gpui::App) -> Option<AnyElement> {
+        let state = ws.read(cx);
         let game = state.game();
         // Simple mode saves automatically, so there's nothing to confirm.
         if game.pending.is_empty() || state.mode() == Mode::Simple {
@@ -681,9 +684,9 @@ impl Shell {
         }
         let names: Vec<&str> = game.pending.keys().filter_map(|id| game.def.tweak(id).map(|t| t.label)).take(4).collect();
         let more = game.pending.len().saturating_sub(names.len());
-        let review_ws = self.ws.clone();
-        let discard_ws = self.ws.clone();
-        let apply_ws = self.ws.clone();
+        let review_ws = ws.clone();
+        let discard_ws = ws.clone();
+        let apply_ws = ws.clone();
         let bar = div()
             .flex_none()
             .h(px(64.))
@@ -773,7 +776,14 @@ impl Shell {
             .child(div().size(px(6.)).flex_none().rounded_full().bg(status_color(game)))
             .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::text_muted()).child(where_))
             .when_some(state.busy.clone(), |d, b| {
-                d.child(div().flex().items_center().gap(px(8.)).child(ui::progress_ring("busy-ring", 14.)).child(item(b).text_color(theme::text())))
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .children(self.spinner.clone().map(|s| gpui::AnyView::from(s).cached(gpui::StyleRefinement::default().size(px(14.)).flex_none())))
+                        .child(item(b).text_color(theme::text())),
+                )
                     .child(sep())
             })
             .child(item(sdk))
@@ -1039,59 +1049,22 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.track_navigation(cx);
-        let (page_kind, game_id, nav) = {
-            let state = self.ws.read(cx);
-            let def = state.game().def;
-            let mode = state.mode();
-            let nav = def
-                .nav_items(mode)
-                .find(|n| n.kind == state.page)
-                .copied()
-                .or_else(|| {
-                    // Tool pages reached from elsewhere (e.g. App Settings).
-                    matches!(state.page, PageKind::Capture).then_some(NavItem {
-                        kind: state.page,
-                        title: "Comparison Capture",
-                        icon: Icon::Camera,
-                        categories: &[],
-                    })
-                })
-                .or_else(|| def.nav_items(mode).next().copied());
-            (state.page, def.id, nav)
-        };
-        // The game is running: its own screen replaces the page and pane.
         let running = self.ws.read(cx).show_running_screen();
-        let page = match nav {
-            _ if running => pages::running::render(&self.ws, window, cx),
-            Some(nav) => pages::render(&nav, &self.ws, window, cx),
-            None => div().into_any_element(),
-        };
-        let page_key = SharedString::from(format!("page-{game_id}-{page_kind:?}-{running}"));
-        // Pages enter with Windows' page-refresh motion (rise and fade in).
-        let content = if running || pages::fills_height(page_kind) {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .child(ui::entrance_fill(page_key, 140., page))
-        } else {
-            div().flex_1().min_h_0().child(
-                div().id(ElementId::Name(page_key.clone())).size_full().overflow_y_scroll().child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_center()
-                        .child(div().flex_1().min_w_0().max_w(px(1064. + 72.)).px(px(36.)).pt(px(24.)).pb(px(36.)).child(ui::entrance(page_key, 140., page))),
-                ),
-            )
-        };
+        // The spinner exists only while something runs in the background.
+        match (self.ws.read(cx).busy.is_some(), self.spinner.is_some()) {
+            (true, false) => self.spinner = Some(cx.new(BusySpinner::new)),
+            (false, true) => self.spinner = None,
+            _ => {}
+        }
 
         if window.focused(cx).is_none() {
             window.focus(&self.focus);
         }
-        let pending_bar = self.pending_bar(cx).filter(|_| !running);
-        let toast_bottom = 44. + if pending_bar.is_some() { 64. } else { 0. };
+        let pending_shown = {
+            let state = self.ws.read(cx);
+            !running && state.mode() == Mode::Advanced && !state.game().pending.is_empty()
+        };
+        let toast_bottom = 44. + if pending_shown { 64. } else { 0. };
         let drop_ws = self.ws.clone();
         self.narrow = window.viewport_size().width < px(1008.);
         // Wide: the pane is inline, collapsible to the rail. Narrow: the rail
@@ -1151,8 +1124,12 @@ impl Render for Shell {
                             .when(!running, |d| d.border_l_1().rounded_tl(px(theme::RADIUS_LG)))
                             .border_color(theme::card_stroke())
                             .overflow_hidden()
-                            .child(content)
-                            .children(pending_bar),
+                            // Cached: animations elsewhere (the spinner, pane
+                            // hover fades, the nav pill) don't re-render it.
+                            .child(
+                                gpui::AnyView::from(self.page_host.clone())
+                                    .cached(gpui::StyleRefinement::default().flex_1().min_h_0().w_full()),
+                            ),
                     ),
             )
             .child(self.status_bar(cx))
@@ -1193,6 +1170,100 @@ impl Render for Shell {
             })
             .child(self.toasts(toast_bottom, cx))
             .children(gpui_component::Root::render_dialog_layer(window, cx))
+    }
+}
+
+/// The page area: the active page (or the game-running screen) and the Apply
+/// bar. It's its own view so the shell can render it `.cached(..)`: it only
+/// re-renders when the workspace changes or its own animations run.
+pub struct PageHost {
+    ws: Entity<Workspace>,
+    _sub: Subscription,
+}
+
+impl PageHost {
+    fn new(ws: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        let sub = cx.observe(&ws, |_, _, cx| cx.notify());
+        Self { ws, _sub: sub }
+    }
+}
+
+impl Render for PageHost {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (page_kind, game_id, nav) = {
+            let state = self.ws.read(cx);
+            let def = state.game().def;
+            let mode = state.mode();
+            let nav = def
+                .nav_items(mode)
+                .find(|n| n.kind == state.page)
+                .copied()
+                .or_else(|| {
+                    // Tool pages reached from elsewhere (e.g. App Settings).
+                    matches!(state.page, PageKind::Capture).then_some(NavItem {
+                        kind: state.page,
+                        title: "Comparison Capture",
+                        icon: Icon::Camera,
+                        categories: &[],
+                    })
+                })
+                .or_else(|| def.nav_items(mode).next().copied());
+            (state.page, def.id, nav)
+        };
+        // The game is running: its own screen replaces the page.
+        let running = self.ws.read(cx).show_running_screen();
+        let page = match nav {
+            _ if running => pages::running::render(&self.ws, window, cx),
+            Some(nav) => pages::render(&nav, &self.ws, window, cx),
+            None => div().into_any_element(),
+        };
+        let page_key = SharedString::from(format!("page-{game_id}-{page_kind:?}-{running}"));
+        // Pages enter with Windows' page-refresh motion (rise and fade in).
+        let content = if running || pages::fills_height(page_kind) {
+            div().flex_1().min_h_0().flex().flex_col().child(ui::entrance_fill(page_key, 140., page))
+        } else {
+            div().flex_1().min_h_0().child(
+                div().id(ElementId::Name(page_key.clone())).size_full().overflow_y_scroll().child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .child(div().flex_1().min_w_0().max_w(px(1064. + 72.)).px(px(36.)).pt(px(24.)).pb(px(36.)).child(ui::entrance(page_key, 140., page))),
+                ),
+            )
+        };
+        let pending_bar = Shell::pending_bar(&self.ws, cx).filter(|_| !running);
+        div().size_full().flex().flex_col().child(content).children(pending_bar)
+    }
+}
+
+/// The status bar's indeterminate ProgressRing as its own view, ticking at
+/// 30 fps: the rest of the window isn't re-rendered for it, and it doesn't
+/// run at the monitor's refresh rate.
+pub struct BusySpinner {
+    started: std::time::Instant,
+    _tick: gpui::Task<()>,
+}
+
+impl BusySpinner {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let tick = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(33)).await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { started: std::time::Instant::now(), _tick: tick }
+    }
+}
+
+impl Render for BusySpinner {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // One 2 s cycle, like WinUI's ring; a still arc without motion.
+        let t = if theme::motion() { (self.started.elapsed().as_secs_f32() / 2.).fract() } else { 0.2 };
+        ui::progress_ring_frame(14., t)
     }
 }
 
