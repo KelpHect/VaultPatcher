@@ -224,13 +224,20 @@ impl<T: ImageCache> ImageCacheProvider for Entity<T> {
     }
 }
 
-/// An implementation of ImageCache, that uses an LRU caching strategy to unload images when the cache is full
-pub struct RetainAllImageCache(HashMap<u64, ImageCacheItem>);
+/// An image cache that keeps what it loads until it's released, or (fork)
+/// with a capacity, only the most recently drawn images.
+pub struct RetainAllImageCache {
+    items: HashMap<u64, (ImageCacheItem, std::time::Instant)>,
+    /// Fork: keep at most this many images, dropping the least recently
+    /// drawn ones (never one drawn in the last 250 ms, so a frame showing
+    /// more images than this can't evict its own).
+    capacity: Option<usize>,
+}
 
 impl fmt::Debug for RetainAllImageCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HashMapImageCache")
-            .field("num_images", &self.0.len())
+            .field("num_images", &self.items.len())
             .finish()
     }
 }
@@ -239,11 +246,17 @@ impl RetainAllImageCache {
     /// Create a new image cache.
     #[inline]
     pub fn new(cx: &mut App) -> Entity<Self> {
-        let e = cx.new(|_cx| RetainAllImageCache(HashMap::new()));
+        Self::with_capacity(None, cx)
+    }
+
+    /// Fork: a cache that keeps only the `capacity` most recently drawn
+    /// images (see [`retain_recent`]).
+    pub fn with_capacity(capacity: Option<usize>, cx: &mut App) -> Entity<Self> {
+        let e = cx.new(|_cx| RetainAllImageCache { items: HashMap::new(), capacity });
         cx.observe_release(&e, |image_cache, cx| {
-            let images: Vec<_> = std::mem::replace(&mut image_cache.0, HashMap::new())
+            let images: Vec<_> = std::mem::replace(&mut image_cache.items, HashMap::new())
                 .into_iter()
-                .filter_map(|(_, mut item)| item.get().and_then(Result::ok))
+                .filter_map(|(_, (mut item, _))| item.get().and_then(Result::ok))
                 .collect();
             // The cache is usually released while a window is drawing, when
             // that window is checked out of `App::windows`, so dropping the
@@ -269,14 +282,17 @@ impl RetainAllImageCache {
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let hash = hash(source);
+        let now = std::time::Instant::now();
 
-        if let Some(item) = self.0.get_mut(&hash) {
+        if let Some((item, used)) = self.items.get_mut(&hash) {
+            *used = now;
             return item.get();
         }
 
         let fut = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
         let task = cx.background_executor().spawn(fut).shared();
-        self.0.insert(hash, ImageCacheItem::Loading(task.clone()));
+        self.items.insert(hash, (ImageCacheItem::Loading(task.clone()), now));
+        self.evict(window, cx);
 
         let entity = window.current_view();
         window
@@ -293,9 +309,25 @@ impl RetainAllImageCache {
         None
     }
 
+    /// Drops the least recently drawn images beyond the capacity.
+    fn evict(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(capacity) = self.capacity else { return };
+        while self.items.len() > capacity {
+            let Some((&oldest, &(_, used))) = self.items.iter().min_by_key(|(_, (_, used))| *used) else { break };
+            if used.elapsed() < std::time::Duration::from_millis(250) {
+                break;
+            }
+            if let Some((mut item, _)) = self.items.remove(&oldest)
+                && let Some(Ok(image)) = item.get()
+            {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+
     /// Clear the image cache.
     pub fn clear(&mut self, window: &mut Window, cx: &mut App) {
-        for (_, mut item) in std::mem::replace(&mut self.0, HashMap::new()) {
+        for (_, (mut item, _)) in std::mem::replace(&mut self.items, HashMap::new()) {
             if let Some(Ok(image)) = item.get() {
                 cx.drop_image(image, Some(window));
             }
@@ -305,7 +337,7 @@ impl RetainAllImageCache {
     /// Remove the image from the cache by the given source.
     pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
         let hash = hash(source);
-        if let Some(mut item) = self.0.remove(&hash)
+        if let Some((mut item, _)) = self.items.remove(&hash)
             && let Some(Ok(image)) = item.get()
         {
             cx.drop_image(image, Some(window));
@@ -314,12 +346,12 @@ impl RetainAllImageCache {
 
     /// Returns the number of images in the cache.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.items.len()
     }
 
     /// Returns true if the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.items.is_empty()
     }
 }
 
@@ -336,12 +368,19 @@ impl ImageCache for RetainAllImageCache {
 
 /// Constructs a retain-all image cache that uses the element state associated with the given ID.
 pub fn retain_all(id: impl Into<ElementId>) -> RetainAllImageCacheProvider {
-    RetainAllImageCacheProvider { id: id.into() }
+    RetainAllImageCacheProvider { id: id.into(), capacity: None }
+}
+
+/// Fork: like [`retain_all`], but keeps only the `capacity` most recently
+/// drawn images, freeing the rest (their atlas textures too).
+pub fn retain_recent(id: impl Into<ElementId>, capacity: usize) -> RetainAllImageCacheProvider {
+    RetainAllImageCacheProvider { id: id.into(), capacity: Some(capacity) }
 }
 
 /// A provider struct for creating a retain-all image cache inline
 pub struct RetainAllImageCacheProvider {
     id: ElementId,
+    capacity: Option<usize>,
 }
 
 impl ImageCacheProvider for RetainAllImageCacheProvider {
@@ -351,7 +390,7 @@ impl ImageCacheProvider for RetainAllImageCacheProvider {
                 window.with_element_state::<Entity<RetainAllImageCache>, _>(
                     global_id,
                     |cache, _window| {
-                        let mut cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+                        let mut cache = cache.unwrap_or_else(|| RetainAllImageCache::with_capacity(self.capacity, cx));
                         (cache.clone(), cache)
                     },
                 )

@@ -51,7 +51,7 @@ Your own re-shot images are never replaced. Anyone can re-shoot them from
 2. Launches the game straight into a chosen save (via Quick Startup's `-Character=`).
 3. A tiny helper SDK mod closes startup notices, hides the HUD and weapon, and signals ready.
    The app grabs the game window, then the helper quits.
-4. The screenshot is stored as a JPEG in `%APPDATA%\VaultPatcher\comparisons`.
+4. The screenshot is stored as a JPEG in the data folder's `comparisons` folder.
 5. Settings are restored afterwards.
 
 Settings pages are a searchable list with a detail pane. For settings with images, the
@@ -83,6 +83,15 @@ closes).
   or right-click a mod), and core SDK modules locked.
 - **Backups**: every apply, patch and SDK install is snapshotted first and can be restored
   in one click.
+- **Portable**: settings, backups, profiles and images live in a `VaultPatcher Data`
+  folder next to `VaultPatcher.exe`, so the app and its data move together. Where that
+  folder can't be written (an exe in Program Files) it uses `%APPDATA%\VaultPatcher`
+  instead, and data an older version kept there moves next to the exe on first run.
+  `VAULT_PATCHER_DATA_DIR` overrides the location.
+- **App frame rate**: Vault Patcher redraws only while something changes, and animations
+  run at *Balanced* by default: the even fraction of your display's refresh rate nearest
+  45 fps (45 at 180 Hz, 48 at 144 Hz, 40 at 120 Hz). 30 fps, 60 fps and the full display
+  rate are in App settings. It's the app's own frame rate, never the game's.
 - **Launch options** on the Overview page (`-NoLauncher`, `-NoStartupMovies` and more),
   used by the sidebar's Play button; its dropdown can also start BL2/TPS through the
   game's own launcher, or the game exe directly no matter what the options say, and

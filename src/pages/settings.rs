@@ -10,7 +10,7 @@ use crate::core::backup;
 use crate::mods::SdkStatus;
 use crate::theme::{self, Icon};
 use crate::ui::{self, Variant, setting_row};
-use crate::workspace::Workspace;
+use crate::workspace::{AppFrameRate, Workspace};
 
 /// Settings page column width (the Gallery's SettingsPage max width).
 const COLUMN: f32 = 1064.;
@@ -20,6 +20,53 @@ const ABOUT: &str = "app-settings-about";
 
 /// A clickable SettingsCard: the whole row is the button, with an action
 /// glyph on the right (open-in-new for link-outs, a chevron for pages).
+/// Vault Patcher's own frame rate (not the game's), with a warning when
+/// "Match display" would mean more than 60 frames a second.
+fn frame_rate_row(ws: &Entity<Workspace>, current: AppFrameRate, cx: &App) -> AnyElement {
+    use crate::tweaks::{Opt, opt};
+    static OPTIONS: [Opt; 4] = [opt("30", "30 fps"), opt("balanced", "Balanced"), opt("60", "60 fps"), opt("display", "Match display")];
+    let hz = crate::win11::display_refresh_hz();
+    let label = match current {
+        AppFrameRate::Display => match hz {
+            Some(hz) => format!("Match display ({hz} Hz)"),
+            None => "Match display".to_string(),
+        },
+        AppFrameRate::Balanced => format!("Balanced ({} fps)", current.cap().unwrap_or(45)),
+        other => format!("{} fps", other.cap().unwrap_or(0)),
+    };
+    let pick_ws = ws.clone();
+    let select = crate::controls::select(
+        "set-frame-rate",
+        label,
+        &OPTIONS,
+        Some(current.id()),
+        false,
+        std::rc::Rc::new(move |v, _, cx| {
+            if let Some(rate) = AppFrameRate::from_id(v) {
+                pick_ws.update(cx, |ws, cx| ws.update_settings(|s| s.frame_rate = rate, cx));
+            }
+        }),
+        cx,
+    );
+    let warn = (current == AppFrameRate::Display).then_some(hz).flatten().filter(|&hz| hz > 60);
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            "App frame rate",
+            "How smoothly Vault Patcher's own animations run. This is the app's frame rate, not the game's: it never affects how Borderlands runs. Balanced picks an even fraction of your display's refresh rate near 45 fps. Nothing is redrawn while nothing changes, and dragging or typing always follows your display.",
+            select,
+        ))
+        .children(warn.map(|hz| {
+            div().px(px(16.)).pb(px(12.)).child(ui::info_bar(
+                ui::Severity::Warning,
+                format!("{hz} Hz uses about {}x the CPU of Balanced", (hz as f32 / crate::workspace::balanced_fps(hz) as f32).round() as u32),
+                format!("Vault Patcher would redraw {hz} times a second while animating, for no visible benefit in a settings app. Balanced or 60 fps is recommended."),
+            ))
+        }))
+        .into_any_element()
+}
+
 fn link_row(
     id: &'static str,
     title: impl Into<SharedString>,
@@ -85,7 +132,9 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
                 })
                 .on_click(move |_, _, cx| music_ws.update(cx, |ws, cx| ws.set_music(!music, cx)))
                 .into_any_element(),
-        ));
+        ))
+        .child(ui::divider())
+        .child(frame_rate_row(ws, state.settings.frame_rate, cx));
 
     // ---- folders
     let install_ws = ws.clone();

@@ -247,6 +247,8 @@ impl WindowsPlatform {
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
+                let slack = vsync_provider.interval() / 2;
+                let mut last_frame = std::time::Instant::now();
                 loop {
                     vsync_provider.wait_for_vsync();
                     if check_device_lost(&directx_device.device) {
@@ -265,6 +267,11 @@ impl WindowsPlatform {
                     if !crate::window::FRAME_WANTED.load(std::sync::atomic::Ordering::Acquire) {
                         continue;
                     }
+                    // Fork: the app's frame-rate cap.
+                    if !crate::window::frame_allowed(last_frame.elapsed(), slack) {
+                        continue;
+                    }
+                    last_frame = std::time::Instant::now();
                     for hwnd in all_windows.read().iter() {
                         unsafe {
                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);

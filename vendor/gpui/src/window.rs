@@ -102,6 +102,42 @@ pub(crate) fn want_frame() {
     FRAME_WANTED.store(true, std::sync::atomic::Ordering::Release);
 }
 
+/// Fork: the app's frame-rate cap (0 = the display's refresh rate).
+static MAX_FRAME_RATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Milliseconds since [`frame_clock`]'s start at the last input event.
+static LAST_INPUT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn frame_clock() -> Duration {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
+}
+
+/// Caps how often windows redraw (Windows): animations and other redraws
+/// run at most `fps` times a second instead of at the display's refresh
+/// rate. Animations are time-based, so they still finish on time with fewer
+/// frames. For 100 ms after any input, frames aren't capped, so dragging,
+/// scrolling and typing stay as responsive as the display allows. `None`
+/// (the default) follows the display.
+pub fn set_max_frame_rate(fps: Option<u32>) {
+    MAX_FRAME_RATE.store(fps.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The cap set with [`set_max_frame_rate`].
+pub fn max_frame_rate() -> Option<u32> {
+    Some(MAX_FRAME_RATE.load(std::sync::atomic::Ordering::Relaxed)).filter(|&f| f > 0)
+}
+
+/// Whether a vsync `since_last` after the previous frame may start another
+/// one under the cap. `slack` is how early a frame may come: half a vsync
+/// interval, so a 30 fps cap on a 180 Hz display takes every sixth vblank.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn frame_allowed(since_last: Duration, slack: Duration) -> bool {
+    let Some(fps) = max_frame_rate() else { return true };
+    let input = std::sync::atomic::Ordering::Relaxed;
+    let since_input = frame_clock().saturating_sub(Duration::from_millis(LAST_INPUT_MS.load(input)));
+    since_input < Duration::from_millis(100) || since_last + slack >= Duration::from_secs(1) / fps
+}
+
 struct WindowInvalidatorInner {
     pub dirty: bool,
     pub draw_phase: DrawPhase,
@@ -3681,6 +3717,7 @@ impl Window {
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
         self.last_input_timestamp.set(Instant::now());
+        LAST_INPUT_MS.store(frame_clock().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
         want_frame();
         // Handlers may set this to false by calling `stop_propagation`.
         cx.propagate_event = true;

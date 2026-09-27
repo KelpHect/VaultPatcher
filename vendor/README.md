@@ -55,6 +55,14 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
   `FRAME_WANTED` is set: by a dirtied view, `on_next_frame` (animations),
   input, or the one-second present after input. An idle window no longer runs
   a frame callback at the monitor's refresh rate.
+- **Frame-rate cap** (Windows): `gpui::set_max_frame_rate(Some(fps))` lets the
+  vsync thread start a frame only every `1/fps` (with half a vblank of slack,
+  so a divisor of the refresh rate lands on exact vblanks). Animations are
+  time-based and still finish on time; for 100 ms after input frames aren't
+  capped, so dragging and typing stay at the display's rate.
+- **Bounded image caches**: `gpui::retain_recent(id, n)` keeps only the `n`
+  most recently drawn images (never one drawn in the last 250 ms, so a frame
+  can't evict its own) and frees the rest with their atlas textures.
 - **Reduce motion**: `gpui::set_reduce_motion` / `gpui::reduce_motion()`
   turns the fades off and lets components skip their animations.
 - **Focus visuals**: `InteractiveElement::focus_visible(style)` applies only

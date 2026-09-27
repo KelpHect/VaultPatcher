@@ -40,6 +40,60 @@ pub struct AppSettings {
     pub music: bool,
     /// The first-run welcome has been dismissed.
     pub welcomed: bool,
+    /// How often Vault Patcher redraws its own window (not the game).
+    pub frame_rate: AppFrameRate,
+}
+
+/// Vault Patcher's own frame rate while it animates. Nothing redraws at all
+/// while nothing changes, and input is never capped (see
+/// `gpui::set_max_frame_rate`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppFrameRate {
+    Fps30,
+    /// The even fraction of the display's refresh rate nearest 45 fps.
+    #[default]
+    Balanced,
+    Fps60,
+    /// The display's refresh rate.
+    Display,
+}
+
+impl AppFrameRate {
+    pub const ALL: [AppFrameRate; 4] = [AppFrameRate::Fps30, AppFrameRate::Balanced, AppFrameRate::Fps60, AppFrameRate::Display];
+
+    pub fn cap(self) -> Option<u32> {
+        match self {
+            AppFrameRate::Fps30 => Some(30),
+            AppFrameRate::Balanced => Some(balanced_fps(crate::win11::display_refresh_hz().unwrap_or(60))),
+            AppFrameRate::Fps60 => Some(60),
+            AppFrameRate::Display => None,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            AppFrameRate::Fps30 => "30",
+            AppFrameRate::Balanced => "balanced",
+            AppFrameRate::Fps60 => "60",
+            AppFrameRate::Display => "display",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.id() == id)
+    }
+
+    pub fn apply(self) {
+        gpui::set_max_frame_rate(self.cap());
+    }
+}
+
+/// The frame rate nearest 45 that divides `refresh_hz` evenly, so every
+/// frame lands on a vblank and animations don't judder: 45 at 180 Hz, 48 at
+/// 144, 40 at 120, and 60 on a 60 Hz display (already its own rate).
+pub fn balanced_fps(refresh_hz: u32) -> u32 {
+    let every = ((refresh_hz as f32 / 45.).round() as u32).max(1);
+    refresh_hz / every
 }
 
 impl AppSettings {
@@ -471,6 +525,7 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let settings = AppSettings::load();
+        settings.frame_rate.apply();
         let games: Vec<GameState> = games::all().iter().map(|d| GameState::new(d)).collect();
         let active = settings
             .active_game
@@ -2336,6 +2391,14 @@ impl Workspace {
         }
         self.apply_run_audio();
         cx.notify();
+        // Once the window has minimized, give the game the memory we aren't using.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            if this.read_with(cx, |ws, _| ws.run_watch.background).unwrap_or(false) {
+                crate::win11::trim_memory();
+            }
+        })
+        .detach();
         true
     }
 
@@ -2407,6 +2470,7 @@ impl Workspace {
 
     pub fn update_settings(&mut self, f: impl FnOnce(&mut AppSettings), cx: &mut Context<Self>) {
         f(&mut self.settings);
+        self.settings.frame_rate.apply();
         self.settings.save();
         cx.notify();
     }
@@ -2763,6 +2827,22 @@ fn prune_backups(game_id: &str, max: Option<usize>) {
     let prunable = |b: &Backup| config_only(b) && b.label != backup::ORIGINAL_LABEL;
     for old in backup::list(game_id).into_iter().filter(prunable).skip(max) {
         let _ = backup::delete(&old);
+    }
+}
+
+#[cfg(test)]
+mod frame_rate_tests {
+    use super::balanced_fps;
+
+    #[test]
+    fn balanced_divides_the_refresh_rate() {
+        assert_eq!(balanced_fps(180), 45);
+        assert_eq!(balanced_fps(144), 48);
+        assert_eq!(balanced_fps(120), 40);
+        assert_eq!(balanced_fps(165), 41);
+        assert_eq!(balanced_fps(240), 48);
+        assert_eq!(balanced_fps(60), 60);
+        assert_eq!(balanced_fps(30), 30);
     }
 }
 

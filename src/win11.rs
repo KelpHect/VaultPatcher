@@ -82,6 +82,35 @@ pub fn animations_enabled() -> bool {
     true
 }
 
+/// Hands the process's unused memory back to Windows (its working set is
+/// trimmed; pages come back on demand). Used when Vault Patcher goes into
+/// background mode, so a running game has that RAM.
+pub fn trim_memory() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        // SAFETY: (-1, -1) is the documented "trim now" request for our own process.
+        unsafe {
+            SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+        }
+    }
+}
+
+/// The main display's refresh rate, for the frame-rate setting's warning.
+pub fn display_refresh_hz() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
+        // SAFETY: DEVMODEW is plain data; dmSize tells the API its size.
+        let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
+        mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        let ok = unsafe { EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut mode) };
+        (ok != 0 && mode.dmDisplayFrequency > 1).then_some(mode.dmDisplayFrequency)
+    }
+    #[cfg(not(windows))]
+    None
+}
+
 /// Puts the Mica backdrop behind the window, with rounded corners. Returns
 /// false where the system can't (Windows 10, or 11 before 22H2) so the
 /// theme paints a solid background instead.

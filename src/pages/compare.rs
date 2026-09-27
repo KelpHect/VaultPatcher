@@ -255,6 +255,9 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
     let max_h = f32::from(viewport.height) - 230. - 48. - 48.;
     let frame_w = max_w.min(max_h * 16. / 9.).max(320.);
     let frame_h = frame_w * 9. / 16.;
+    // The smallest copies that still fill the frame on this display.
+    let pixels = frame_w * window.scale_factor();
+    let (left_path, right_path) = (compare::sized(&left_path, pixels), compare::sized(&right_path, pixels));
     let split_ws = ws.clone();
     let frame = split_frame(
         "lightbox-frame".into(),
@@ -327,9 +330,10 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
     let close_btn_ws = ws.clone();
     Some(
         div()
-            // Full-size shots live in a cache owned by the viewer, freed when
-            // it closes (the app-wide one keeps images for the whole run).
-            .image_cache(gpui::retain_all("lightbox-images"))
+            // Full-size shots live in a cache owned by the viewer: only the
+            // last two pairs stay decoded (stepping back is still instant),
+            // and all of it is freed when the viewer closes.
+            .image_cache(gpui::retain_recent("lightbox-images", 4))
             .id("lightbox")
             .absolute()
             .inset_0()

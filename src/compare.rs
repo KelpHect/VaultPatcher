@@ -156,11 +156,33 @@ pub fn images(game_id: &str, tweak: &Tweak) -> Vec<(String, PathBuf)> {
 }
 
 /// Width of the preview copies used in the settings pages. Full-size images
-/// (1600px) are only decoded for the full-window viewer.
+/// (1600px) are only decoded when the viewer is drawn big enough to need them.
 const PREVIEW_WIDTH: u32 = 640;
+/// Width of the copies the viewer uses at usual window sizes.
+const MEDIUM_WIDTH: u32 = 1024;
 
 fn preview_dir() -> PathBuf {
     backup::data_dir().join("previews")
+}
+
+fn medium_dir() -> PathBuf {
+    backup::data_dir().join("previews-medium")
+}
+
+/// The smallest copy of a comparison image that still covers `pixels`
+/// device pixels of width: the viewer in a normal window decodes a 1024px
+/// copy (2.4 MB in memory) instead of the 1600px original (5.8 MB), and the
+/// original only when drawn larger than that.
+pub fn sized(full: &Path, pixels: f32) -> PathBuf {
+    let copy = |dir: PathBuf| full.strip_prefix(comparisons_dir()).ok().map(|rel| dir.join(rel)).filter(|p| exists(p));
+    let chosen = if pixels <= PREVIEW_WIDTH as f32 {
+        copy(preview_dir()).or_else(|| copy(medium_dir()))
+    } else if pixels <= MEDIUM_WIDTH as f32 {
+        copy(medium_dir())
+    } else {
+        None
+    };
+    chosen.unwrap_or_else(|| full.to_path_buf())
 }
 
 /// The small copy of a comparison image, or the image itself until the
@@ -185,17 +207,22 @@ pub fn make_previews(game_id: &str) -> usize {
                 continue;
             }
             let Ok(rel) = full.strip_prefix(comparisons_dir()) else { continue };
-            let small = preview_dir().join(rel);
             let fresh = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
-            if fresh(&small).is_some_and(|s| fresh(&full).is_some_and(|f| s >= f)) {
+            let stale: Vec<(PathBuf, u32)> = [(preview_dir().join(rel), PREVIEW_WIDTH), (medium_dir().join(rel), MEDIUM_WIDTH)]
+                .into_iter()
+                .filter(|(copy, _)| !fresh(copy).is_some_and(|s| fresh(&full).is_some_and(|f| s >= f)))
+                .collect();
+            if stale.is_empty() {
                 continue;
             }
             let Ok(img) = image::open(&full) else { continue };
-            let img = img.resize(PREVIEW_WIDTH, u32::MAX, image::imageops::FilterType::Triangle);
-            if fs::create_dir_all(small.parent().expect("has parent")).is_ok()
-                && img.to_rgb8().save_with_format(&small, image::ImageFormat::Jpeg).is_ok()
-            {
-                made += 1;
+            for (copy, width) in stale {
+                let resized = img.resize(width, u32::MAX, image::imageops::FilterType::Triangle);
+                if fs::create_dir_all(copy.parent().expect("has parent")).is_ok()
+                    && resized.to_rgb8().save_with_format(&copy, image::ImageFormat::Jpeg).is_ok()
+                {
+                    made += 1;
+                }
             }
         }
     }

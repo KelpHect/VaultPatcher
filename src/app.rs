@@ -1383,7 +1383,16 @@ impl Render for PageHost {
             )
         };
         let pending_bar = Shell::pending_bar(&self.ws, cx).filter(|_| !running);
-        div().size_full().flex().flex_col().child(content).children(pending_bar)
+        div()
+            // Pages share a cache of their most recent images, so the ones a
+            // page you've left was showing are freed instead of kept for the
+            // whole run.
+            .image_cache(gpui::retain_recent("page-images", 24))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(content)
+            .children(pending_bar)
     }
 }
 

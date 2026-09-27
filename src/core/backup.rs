@@ -27,15 +27,85 @@ pub struct Backup {
     pub dir: PathBuf,
 }
 
-/// Where Vault Patcher keeps its settings, records and backups. Tests use a
-/// throwaway folder so they never touch the real one.
+/// Where Vault Patcher keeps its settings, records and backups: a
+/// `VaultPatcher Data` folder next to the exe, so the app is portable. Tests
+/// use a throwaway folder so they never touch the real one, and
+/// `VAULT_PATCHER_DATA_DIR` points it anywhere else.
 pub fn data_dir() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join("vaultpatcher-test-data");
     }
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("VaultPatcher")
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(resolve_data_dir).clone()
+}
+
+/// The folder name next to the exe.
+const PORTABLE_DIR: &str = "VaultPatcher Data";
+
+/// Picks the data folder once per run. Next to the exe when that folder is
+/// writable, else `%APPDATA%\VaultPatcher` (an exe in Program Files). Data an
+/// older version kept in `%APPDATA%` moves next to the exe on first run.
+fn resolve_data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("VAULT_PATCHER_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+    let legacy = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("VaultPatcher");
+    let Some(portable) = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join(PORTABLE_DIR))) else {
+        return legacy;
+    };
+    if portable.is_dir() {
+        return portable;
+    }
+    if !legacy.is_dir() {
+        return if writable_dir(&portable) { portable } else { legacy };
+    }
+    match move_dir(&legacy, &portable) {
+        Ok(()) => portable,
+        Err(_) => legacy,
+    }
+}
+
+/// Creates `dir` and checks a file can be written in it.
+fn writable_dir(dir: &Path) -> bool {
+    let probe = dir.join(".write-test");
+    let ok = std::fs::create_dir_all(dir).is_ok() && std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    if !ok {
+        let _ = std::fs::remove_dir(dir);
+    }
+    ok
+}
+
+/// Moves a folder: a rename on the same drive, otherwise a full copy that
+/// only deletes the original once everything arrived. A failed copy is
+/// removed again, so the original stays the one in use.
+fn move_dir(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    if let Err(e) = copy_tree(from, to) {
+        let _ = std::fs::remove_dir_all(to);
+        return Err(e);
+    }
+    let _ = std::fs::remove_dir_all(from);
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 fn game_dir(game_id: &str) -> PathBuf {
@@ -190,4 +260,31 @@ pub fn set_readonly(path: &Path, readonly: bool) -> Result<()> {
 
 pub fn is_readonly(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moving_the_data_folder_keeps_everything() {
+        let root = std::env::temp_dir().join(format!("vp-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let from = root.join("old");
+        std::fs::create_dir_all(from.join("backups").join("bl2")).unwrap();
+        std::fs::write(from.join("settings.json"), b"{}").unwrap();
+        std::fs::write(from.join("backups").join("bl2").join("a.ini"), b"x").unwrap();
+
+        let to = root.join("new").join(PORTABLE_DIR);
+        move_dir(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read(to.join("settings.json")).unwrap(), b"{}");
+        assert_eq!(std::fs::read(to.join("backups").join("bl2").join("a.ini")).unwrap(), b"x");
+
+        // The copy path used across drives gives the same result.
+        let copy = root.join("copy");
+        copy_tree(&to, &copy).unwrap();
+        assert_eq!(std::fs::read(copy.join("backups").join("bl2").join("a.ini")).unwrap(), b"x");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
