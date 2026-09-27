@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use crate::core::detect::DetectSpec;
 use crate::patches::ExePatch;
 use crate::theme::Icon;
-use crate::tweaks::{Category, Preset, Tweak};
+use crate::tweaks::{Category, Preset, RangePair, Tweak};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Support {
@@ -118,6 +118,8 @@ pub struct GameDef {
     pub tweaks: &'static [Tweak],
     /// Shared-catalog tweaks that don't apply to (or are unsafe for) this game.
     pub hidden_tweaks: &'static [&'static str],
+    /// Slider pairs bounding one range (min ≤ max), shown as one control.
+    pub ranges: &'static [RangePair],
     pub presets: &'static [Preset],
     pub patches: &'static [ExePatch],
     pub mods: Option<&'static ModSupport>,
@@ -181,6 +183,11 @@ impl GameDef {
         self.categories.iter().find(|c| c.id == id)
     }
 
+    /// The range `id` is one end of, if any.
+    pub fn range_of(&self, id: &str) -> Option<&'static RangePair> {
+        self.ranges.iter().find(|r| r.min == id || r.max == id)
+    }
+
     pub fn nav_for(&self, mode: Mode) -> &'static [NavGroup] {
         match mode {
             Mode::Simple => self.simple_nav,
@@ -210,17 +217,17 @@ pub fn all() -> &'static [&'static GameDef] {
 /// Simple-mode navigation used by every game.
 pub const SIMPLE_NAV: &[NavGroup] = &[
     NavGroup {
-        title: "Get Started",
+        title: "Get started",
         items: &[
             NavItem {
                 kind: PageKind::Setup,
-                title: "One-Click Setup",
+                title: "One-click setup",
                 icon: Icon::Rocket,
                 categories: &[],
             },
             NavItem {
                 kind: PageKind::Quick,
-                title: "Quick Settings",
+                title: "Quick settings",
                 icon: Icon::Sliders,
                 categories: &[],
             },
@@ -241,12 +248,46 @@ pub const COMMON_NAV: NavGroup = NavGroup {
         },
         NavItem {
             kind: PageKind::Settings,
-            title: "App Settings",
+            title: "App settings",
             icon: Icon::Settings,
             categories: &[],
         },
     ],
 };
+
+#[cfg(test)]
+mod slider_data_tests {
+    use crate::tweaks::Control;
+
+    /// Sentinel words and recommended bands sit inside each slider's range,
+    /// and range pairs join two sliders of one category.
+    #[test]
+    fn slider_extras_fit_their_sliders() {
+        for game in super::all() {
+            for tweak in game.visible_tweaks() {
+                let Control::Slider { min, max, labels, recommended, .. } = tweak.control else { continue };
+                for (v, label) in labels {
+                    assert!((min..=max).contains(v), "{}/{}: {label} = {v} is out of range", game.id, tweak.id);
+                }
+                if let Some((lo, hi)) = recommended {
+                    assert!(min <= lo && lo < hi && hi <= max, "{}/{}: recommended {lo}–{hi}", game.id, tweak.id);
+                }
+            }
+            for pair in game.ranges {
+                let (lo, hi) = (game.tweak(pair.min).expect("range min"), game.tweak(pair.max).expect("range max"));
+                assert!(matches!(lo.control, Control::Slider { .. }) && matches!(hi.control, Control::Slider { .. }));
+                assert_eq!(lo.category, hi.category, "{}: {} and {} should share a page", game.id, pair.min, pair.max);
+                assert_eq!(game.range_of(pair.max).map(|p| p.min), Some(pair.min));
+            }
+        }
+        // The sentinels the pages rely on.
+        let bl2 = &super::bl2::GAME;
+        let word = |id: &str, n: f64| bl2.tweak(id).and_then(|t| t.control.slider_label(n));
+        assert_eq!(word("particle_cap", 0.0), Some("Unlimited"));
+        assert_eq!(word("physx_heap", 0.0), Some("Off"));
+        assert_eq!(word("mesh_lod", -1.0), Some("Force high"));
+    }
+}
 
 #[cfg(test)]
 mod ordering_tests {

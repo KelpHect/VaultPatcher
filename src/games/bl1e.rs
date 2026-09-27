@@ -21,17 +21,17 @@ use crate::tweaks::{
 const SS: &str = "SystemSettings";
 
 const CATEGORIES: &[Category] = &[
-    Category { id: "display", title: "Display", blurb: "Window mode, resolution, render scale and field of view. BL1E is Vert- on ultrawide; see the Ultrawide Fix in One-Click Setup." },
+    Category { id: "display", title: "Display", blurb: "Window mode, resolution, render scale and field of view. BL1E is Vert- on ultrawide; see the ultrawide fix in One-click setup." },
     Category { id: "framerate", title: "Framerate", blurb: "The menu's framerate lock is the real cap. The default \"Smoothed 22–62\" mode is the usual cause of stutter." },
-    Category { id: "quality", title: "World Detail", blurb: "View distance, detail, foliage, decals and lights." },
+    Category { id: "quality", title: "World detail", blurb: "View distance, detail, foliage, decals and lights." },
     Category { id: "textures", title: "Textures", blurb: "Quality, streaming and filtering. BL1E is 64-bit, so a large texture pool is safe." },
     Category { id: "shadows", title: "Shadows", blurb: "Dynamic shadow quality and resolution." },
-    Category { id: "outlines", title: "Cel Shading & Outlines", blurb: "Swap the post-process chain to remove the ink outlines." },
-    Category { id: "postfx", title: "Post-Processing", blurb: "Anti-aliasing, ambient occlusion (HBAO+), bloom and screen effects." },
-    Category { id: "input", title: "Mouse & Console", blurb: "Mouse feel fixes from PCGamingWiki, and the developer console." },
-    Category { id: "interface", title: "Interface & Audio", blurb: "Subtitles and window focus behaviour." },
+    Category { id: "outlines", title: "Cel shading & outlines", blurb: "Swap the post-process chain to remove the ink outlines." },
+    Category { id: "postfx", title: "Post-processing", blurb: "Anti-aliasing, ambient occlusion (HBAO+), bloom and screen effects." },
+    Category { id: "input", title: "Mouse & console", blurb: "Mouse feel fixes from PCGamingWiki, and the developer console." },
+    Category { id: "interface", title: "Interface & audio", blurb: "Subtitles and window focus behaviour." },
     Category { id: "startup", title: "Startup", blurb: "Skip the launcher and intro movies. Never use -nomoviestartup: it crashes BL1E." },
-    Category { id: "network", title: "Co-op & Network", blurb: "Smoother co-op for hosts. Use with care: the game's physics assume the defaults." },
+    Category { id: "network", title: "Co-op & network", blurb: "Smoother co-op for hosts. Use with care: the game's physics assume the defaults." },
 ];
 
 const WINDOW_MODES: &[Opt] = &[opt("0", "Fullscreen"), opt("1", "Windowed"), opt("2", "Borderless")];
@@ -153,7 +153,7 @@ const TWEAKS: &[Tweak] = &[
     custom("texture_bias", "textures", "Texture resolution cap", "Applies an LOD bias to world, character, weapon and vehicle textures. Half or Quarter saves VRAM on old GPUs.",
         Control::Choice(TEXTURE_BIAS), willow::read_texture_bias, willow::write_texture_bias, C("0"), Impact::Medium, NONE),
     slider("pool_size", "textures", "Texture pool size", "Streaming pool in MB. 2048–3072 reduces texture pop-in on GPUs with 4 GB or more.",
-        &[key(E, "TextureStreaming", "PoolSize")], (600.0, 4096.0, 100.0), 0, "MB", 1200.0, Impact::Medium, NONE),
+        &[key(E, "TextureStreaming", "PoolSize")], (600.0, 4096.0, 100.0), 0, "MB", 1200.0, Impact::Medium, NONE).recommended(2048.0, 3072.0),
     choice("aniso", "textures", "Anisotropic filtering", "Texture sharpness at glancing angles.",
         &[key(E, SS, "MaxAnisotropy")], ANISO, "4", Impact::Low, MENU),
     // ---- shadows
@@ -416,7 +416,7 @@ d3d11.samplerAnisotropy = 16\n";
 const SETUP: &[Component] = &[
     Component {
         id: "modern",
-        name: "Modern Defaults",
+        name: "Modern defaults",
         summary: "Native resolution, framerate locked to your monitor, raw mouse, straight to the menu",
         description: "Borderless at native resolution with the framerate locked to your monitor's refresh rate (which also lifts the co-op client cap), a 90° field of view, no mouse smoothing and even mouse axes, lower input lag, 16× filtering, a larger texture pool, subtitles on, console on ~, and no launcher or intro movies.",
         group: Group::Essentials,
@@ -426,7 +426,7 @@ const SETUP: &[Component] = &[
     },
     Component {
         id: "exit_fix",
-        name: "Exit Hang Fix",
+        name: "Exit hang fix",
         summary: "The game actually closes when you quit",
         description: "Fixes the game freezing instead of closing when you quit. A tiny proxy DLL (version.dll) by endjynn, recommended by PCGamingWiki.",
         group: Group::Fixes,
@@ -440,7 +440,7 @@ const SETUP: &[Component] = &[
     },
     Component {
         id: "no_upsell",
-        name: "Remove the Borderlands 3 Ad",
+        name: "Remove the Borderlands 3 ad",
         summary: "No BL3 advert on the main menu",
         description: "Moves the main menu's Borderlands 3 upsell package aside (it's renamed, not deleted, and comes back if you untick this or verify files in Steam).",
         group: Group::Essentials,
@@ -450,7 +450,7 @@ const SETUP: &[Component] = &[
     },
     Component {
         id: "dxvk",
-        name: "DXVK Vulkan Renderer",
+        name: "DXVK Vulkan renderer",
         summary: "Smoother frame pacing on Vulkan",
         description: "Runs the Direct3D 11 renderer on Vulkan, which fixes the remaster's uneven frame pacing for many players. Don't combine with ReShade or Luma (they also use dxgi.dll). If the game stays at 1080p on a multi-monitor PC, remove it. Needs an up-to-date driver with Vulkan 1.4.",
         group: Group::Performance,
@@ -460,7 +460,7 @@ const SETUP: &[Component] = &[
     },
     Component {
         id: "ultrawide",
-        name: "Ultrawide Fix",
+        name: "Ultrawide fix",
         summary: "Correct field of view and HUD on 21:9 and 32:9",
         description: "PolarWizard's fix for ultrawide monitors (an ASI plugin loaded through winmm.dll). BL1E is Vert-, so without it wide screens see less, not more. Set the in-game FOV to 120 and don't change resolution in-game while it's installed. Only useful on screens wider than 16:9.",
         group: Group::Performance,
@@ -531,13 +531,13 @@ const fn bl1_mod(
 
 const QUICK: &[super::QuickSection] = &[
     super::QuickSection {
-        title: "Look & Feel",
+        title: "Look & feel",
         blurb: "The classic comic-book ink, or a cleaner modern look.",
         tweaks: &["post_chain", "vivid_colors", "motion_blur", "dof"],
         quality_presets: &[],
     },
     super::QuickSection {
-        title: "Graphics Quality",
+        title: "Graphics quality",
         blurb: "Pick a starting point, then fine-tune the essentials.",
         tweaks: &["view_distance", "shadow_res", "ao", "fxaa"],
         quality_presets: &["potato", "balanced", "ultra"],
@@ -603,14 +603,14 @@ const NAV: &[NavGroup] = &[
         ],
     },
     NavGroup {
-        title: "Game Settings",
+        title: "Game settings",
         items: &[
             NavItem { kind: PageKind::Tweaks("display"), title: "Display & FPS", icon: Icon::Display, categories: &["display", "framerate"] },
             NavItem { kind: PageKind::Tweaks("graphics"), title: "Graphics", icon: Icon::Picture, categories: &["quality"] },
-            NavItem { kind: PageKind::Tweaks("textures"), title: "Textures & Shadows", icon: Icon::Texture, categories: &["textures", "shadows"] },
-            NavItem { kind: PageKind::Tweaks("effects"), title: "Outlines & Effects", icon: Icon::Sparkle, categories: &["outlines", "postfx"] },
-            NavItem { kind: PageKind::Tweaks("controls"), title: "Controls & Interface", icon: Icon::Mouse, categories: &["input", "interface"] },
-            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & Network", icon: Icon::Rocket, categories: &["startup", "network"] },
+            NavItem { kind: PageKind::Tweaks("textures"), title: "Textures & shadows", icon: Icon::Texture, categories: &["textures", "shadows"] },
+            NavItem { kind: PageKind::Tweaks("effects"), title: "Outlines & effects", icon: Icon::Sparkle, categories: &["outlines", "postfx"] },
+            NavItem { kind: PageKind::Tweaks("controls"), title: "Controls & interface", icon: Icon::Mouse, categories: &["input", "interface"] },
+            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & network", icon: Icon::Rocket, categories: &["startup", "network"] },
         ],
     },
     NavGroup {
@@ -672,6 +672,7 @@ pub static GAME: GameDef = GameDef {
     categories: CATEGORIES,
     tweaks: TWEAKS,
     hidden_tweaks: &[],
+    ranges: &[],
     presets: PRESETS,
     patches: &[],
     mods: Some(&WILLOW1_SDK),

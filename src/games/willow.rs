@@ -8,7 +8,7 @@ use crate::setup::{Component, ComponentKind, DxvkTarget, Group, TextSource};
 use crate::theme::Rarity;
 use crate::tweaks::DefaultValue::{B, C, N};
 use crate::tweaks::{
-    Category, ConfigSet, Control, EXPERIMENTAL, Impact, Key, MENU, NONE, Opt, Preset, TF,
+    Category, ConfigSet, Control, EXPERIMENTAL, Impact, Key, MENU, NONE, Opt, Preset, RangePair, TF,
     TF_LOWER, TF_LOWER_INV, TF_UPPER, Tweak, Value, choice, custom, key, match_choice, opt,
     slider, toggle,
 };
@@ -39,18 +39,18 @@ pub const CATEGORIES: &[Category] = &[
     Category { id: "quick", title: "Quick", blurb: "Friendly combined settings used by Simple mode." },
     Category { id: "display", title: "Display", blurb: "Window mode, resolution and sync. The launcher keeps its own copy of these, so Vault Patcher updates both." },
     Category { id: "framerate", title: "Framerate", blurb: "Frame caps and smoothing. Pick \"Smoothed\" and set the range for a custom cap such as 141–142 FPS." },
-    Category { id: "quality", title: "World Detail", blurb: "Draw distance, level of detail, foliage and decals." },
-    Category { id: "aa", title: "Anti-Aliasing & Filtering", blurb: "The game is DirectX 9 only. FXAA is the built-in option; for better AA use driver SGSSAA or a ReShade SMAA preset." },
-    Category { id: "textures", title: "Textures & Streaming", blurb: "Texture resolution, streaming pool and pop-in. The game is a 32-bit exe, so avoid huge pool sizes." },
-    Category { id: "outlines", title: "Cel Shading & Outlines", blurb: "Borderlands' ink outlines come from a Sobel edge-detect post-process. Swap the post-process chain to thin them out or remove them." },
-    Category { id: "postfx", title: "Post-Processing", blurb: "Bloom, ambient occlusion, depth of field, light shafts and other screen effects." },
+    Category { id: "quality", title: "World detail", blurb: "Draw distance, level of detail, foliage and decals." },
+    Category { id: "aa", title: "Anti-aliasing & filtering", blurb: "The game is DirectX 9 only. FXAA is the built-in option; for better AA use driver SGSSAA or a ReShade SMAA preset." },
+    Category { id: "textures", title: "Textures & streaming", blurb: "Texture resolution, streaming pool and pop-in. The game is a 32-bit exe, so avoid huge pool sizes." },
+    Category { id: "outlines", title: "Cel shading & outlines", blurb: "Borderlands' ink outlines come from a Sobel edge-detect post-process. Swap the post-process chain to thin them out or remove them." },
+    Category { id: "postfx", title: "Post-processing", blurb: "Bloom, ambient occlusion, depth of field, light shafts and other screen effects." },
     Category { id: "shadows", title: "Shadows", blurb: "Dynamic shadow toggles and shadow map resolution. Dynamic shadows are the single biggest FPS cost." },
-    Category { id: "physx", title: "PhysX & Destruction", blurb: "GPU particle, cloth and fluid effects. On AMD/Intel GPUs PhysX runs on the CPU and costs a lot of FPS at Medium or High." },
-    Category { id: "camera", title: "Field of View", blurb: "The in-game slider stops at 110 and is saved in your profile. A hotkey bind can push the FOV further." },
-    Category { id: "input", title: "Console & Input", blurb: "Unlock the developer console and clean up bindings. Sensitivity, smoothing and invert live in profile.bin, not the ini files." },
-    Category { id: "hud", title: "HUD & Menus", blurb: "Main-menu and HUD behavior." },
-    Category { id: "gameplay", title: "Gameplay Feel", blurb: "Camera shakes, corpse cleanup and other feel tweaks." },
-    Category { id: "audio", title: "Audio & Focus", blurb: "What happens when you alt-tab, voice chat, and mixer voices." },
+    Category { id: "physx", title: "PhysX & destruction", blurb: "GPU particle, cloth and fluid effects. On AMD/Intel GPUs PhysX runs on the CPU and costs a lot of FPS at Medium or High." },
+    Category { id: "camera", title: "Field of view", blurb: "The in-game slider stops at 110 and is saved in your profile. A hotkey bind can push the FOV further." },
+    Category { id: "input", title: "Console & input", blurb: "Unlock the developer console and clean up bindings. Sensitivity, smoothing and invert live in profile.bin, not the ini files." },
+    Category { id: "hud", title: "HUD & menus", blurb: "Main-menu and HUD behavior." },
+    Category { id: "gameplay", title: "Gameplay feel", blurb: "Camera shakes, corpse cleanup and other feel tweaks." },
+    Category { id: "audio", title: "Audio & focus", blurb: "What happens when you alt-tab, voice chat, and mixer voices." },
     Category { id: "startup", title: "Startup", blurb: "Get to Sanctuary faster: skip the logo movies and the intro-cinematic confirmation." },
     Category { id: "network", title: "Network", blurb: "Bandwidth hints for co-op. Values from community co-op lag guides." },
 ];
@@ -456,6 +456,14 @@ pub(crate) fn match_display(c: &mut ConfigSet, mode: DisplayMode) {
 
 // ---- the catalog -------------------------------------------------------------------
 
+/// The smoothed framerate range, edited as one RangeSlider.
+pub const RANGES: &[RangePair] = &[RangePair {
+    min: "smooth_min",
+    max: "smooth_max",
+    label: "Smoothed range",
+    description: "Lower and upper bound of the smoothed framerate. The maximum is effectively your FPS cap in Smoothed mode.",
+}];
+
 pub const TWEAKS: &[Tweak] = &[
     // Simple-mode combined controls
     custom("fps_target", "quick", "Framerate limit", "Cap the game at your monitor's refresh rate for smooth, even frame pacing — or remove the cap entirely.",
@@ -501,7 +509,7 @@ pub const TWEAKS: &[Tweak] = &[
     slider("foliage", "quality", "Foliage distance", "Grass and foliage draw radius. 1.0 is the maximum the engine honors; 0 removes grass.",
         &[key(E, SS, "FoliageDrawRadiusMultiplier"), key(L, SS, "FoliageDrawRadiusMultiplier")], (0.0, 1.0, 0.05), 2, "×", 1.0, Impact::Medium, MENU),
     slider("mesh_lod", "quality", "Character LOD bias", "Higher values use lower-detail models sooner. Negative forces high detail.",
-        &[key(E, SS, "SkeletalMeshLODBias")], (-1.0, 4.0, 1.0), 0, "", 0.0, Impact::Low, NONE),
+        &[key(E, SS, "SkeletalMeshLODBias")], (-1.0, 4.0, 1.0), 0, "", 0.0, Impact::Low, NONE).labels(&[(-1.0, "Force high")]),
     slider("particle_lod", "quality", "Particle LOD bias", "Higher values use cheaper particle effects.",
         &[key(E, SS, "ParticleLODBias")], (0.0, 4.0, 1.0), 0, "", 0.0, Impact::Low, NONE),
     toggle("dynamic_lights", "quality", "Dynamic lights", "Muzzle flashes, elemental glows and other moving lights. Off is a big FPS gain but flattens the look.",
@@ -581,7 +589,7 @@ pub const TWEAKS: &[Tweak] = &[
     choice("shadow_res_max", "shadows", "Object shadow resolution (max)", "Largest per-object shadow map.",
         &[key(E, SS, "MaxShadowResolution"), key(L, SS, "MaxShadowResolution")], SHADOW_RES, "1024", Impact::Medium, MENU),
     slider("shadow_bias", "shadows", "Shadow depth bias", "Raise slightly (0.015–0.02) to fix striped \"shadow acne\"; too high detaches shadows from objects.",
-        &[key(E, SS, "SystemShadowDepthBias")], (0.005, 0.03, 0.001), 3, "", 0.012, Impact::None, NONE),
+        &[key(E, SS, "SystemShadowDepthBias")], (0.005, 0.03, 0.001), 3, "", 0.012, Impact::None, NONE).recommended(0.015, 0.02),
     toggle("foreground_self_shadow", "shadows", "Weapon self-shadowing", "Lets your first-person weapon shadow itself.",
         &[key(E, SS, "bEnableForegroundSelfShadowing")], TF, false, Impact::Low, EXPERIMENTAL),
 
@@ -593,13 +601,13 @@ pub const TWEAKS: &[Tweak] = &[
     slider("fracture_parts", "physx", "Fracture debris amount", "How many fracture chunks survive.",
         &[key(E, SS, "NumFracturedPartsScale"), key(L, SS, "NumFracturedPartsScale")], (0.0, 1.0, 0.1), 1, "×", 0.0, Impact::Low, MENU),
     slider("physx_heap", "physx", "PhysX GPU heap", "GPU memory reserved for PhysX in MB. Some players cut this to 0 (with PhysX Low) to fix combat stutter.",
-        &[key(E, ENGINE, "PhysXGpuHeapSize")], (0.0, 512.0, 32.0), 0, "MB", 128.0, Impact::Low, EXPERIMENTAL),
+        &[key(E, ENGINE, "PhysXGpuHeapSize")], (0.0, 512.0, 32.0), 0, "MB", 128.0, Impact::Low, EXPERIMENTAL).labels(&[(0.0, "Off")]),
     slider("particle_cap", "physx", "Particle resize cap", "Upper limit on particle buffer growth. 0 is unlimited; 5000 is a safe cap for weak CPUs.",
-        &[key(E, ENGINE, "MaxParticleResize")], (0.0, 10000.0, 250.0), 0, "", 0.0, Impact::Low, EXPERIMENTAL),
+        &[key(E, ENGINE, "MaxParticleResize")], (0.0, 10000.0, 250.0), 0, "", 0.0, Impact::Low, EXPERIMENTAL).labels(&[(0.0, "Unlimited")]),
 
     // Camera
     custom("fov1_value", "camera", "FOV hotkey value", "Field of view the hotkey sets. Weapons don't scale with it. Around 108 avoids distant fog vanishing while sprinting on ultrawide.",
-        Control::Slider { min: 70.0, max: 150.0, step: 1.0, decimals: 0, unit: "°" }, read_fov_value, write_fov_value, N(110.0), Impact::Low, NONE),
+        Control::Slider { min: 70.0, max: 150.0, step: 1.0, decimals: 0, unit: "°", labels: &[], recommended: None }, read_fov_value, write_fov_value, N(110.0), Impact::Low, NONE),
     custom("fov2_key", "camera", "FOV hotkey", "Adds a keybind that runs `fov <value>`. Press it after loading in; the FOV may reset after respawns or vehicles.",
         Control::Choice(FOV_KEYS), read_fov_key, write_fov_key, C(""), Impact::None, NONE),
 
@@ -651,7 +659,7 @@ pub const TWEAKS: &[Tweak] = &[
 
     // Network
     slider("net_speed", "network", "Internet speed", "Bandwidth hint for online co-op. Co-op lag guides use 20000–40000.",
-        &[key(E, "Engine.Player", "ConfiguredInternetSpeed")], (5000.0, 100000.0, 5000.0), 0, "", 10000.0, Impact::None, NONE),
+        &[key(E, "Engine.Player", "ConfiguredInternetSpeed")], (5000.0, 100000.0, 5000.0), 0, "", 10000.0, Impact::None, NONE).recommended(20000.0, 40000.0),
     slider("lan_speed", "network", "LAN speed", "Bandwidth hint for LAN co-op.",
         &[key(E, "Engine.Player", "ConfiguredLanSpeed")], (5000.0, 100000.0, 5000.0), 0, "", 20000.0, Impact::None, NONE),
 ];
@@ -700,7 +708,7 @@ pub const HD_UPGRADE: &[(&str, crate::tweaks::DefaultValue)] = &[
 
 const MODERN: Component = Component {
         id: "modern",
-        name: "Modern Defaults",
+        name: "Modern defaults",
         summary: "Native resolution, smooth framerate, no blur, straight to the menu",
         description: "Borderless fullscreen at your native resolution, framerate matched to your monitor, lower input lag, no motion blur or blurry texture pop-in, skipped logos and ads, and the console on ~.",
         group: Group::Essentials,
@@ -710,7 +718,7 @@ const MODERN: Component = Component {
 };
 const LAUNCHER: Component = Component {
         id: "launcher",
-        name: "Skip the Launcher",
+        name: "Skip the launcher",
         summary: "Play goes straight into the game",
         description: "Play starts the game directly, and the old launcher can no longer overwrite your video settings.",
         group: Group::Essentials,
@@ -720,7 +728,7 @@ const LAUNCHER: Component = Component {
 };
 const LAA: Component = Component {
         id: "laa",
-        name: "4 GB Memory Patch",
+        name: "4 GB memory patch",
         summary: "Use 4 GB of RAM instead of 2 GB",
         description: "Lets the 32-bit game use 4 GB of RAM instead of 2 GB, preventing out-of-memory crashes with mods and HD textures.",
         group: Group::Essentials,
@@ -730,7 +738,7 @@ const LAA: Component = Component {
 };
 const DXVK: Component = Component {
         id: "dxvk",
-        name: "DXVK Vulkan Renderer",
+        name: "DXVK Vulkan renderer",
         summary: "Vulkan renderer for steadier frame times",
         description: "Runs the 2012 DirectX 9 renderer on Vulkan: steadier frame times, fewer 32-bit memory crashes, and grass flicker fixed with 16x filtering. Needs an up-to-date driver with Vulkan 1.4 (NVIDIA GTX 16 / RTX, AMD RX 7000+, Intel Arc). If the game won't start afterwards, press Restore.",
         group: Group::Performance,
@@ -740,7 +748,7 @@ const DXVK: Component = Component {
 };
 const HD: Component = Component {
         id: "hd",
-        name: "HD Visual Upgrade",
+        name: "HD visual upgrade",
         summary: "Beyond-Ultra draw distance, shadows and textures",
         description: "Pushes past the in-game Ultra: maximum view distance and detail, 4K-class shadow maps and a bigger texture streaming pool.",
         group: Group::Performance,
@@ -909,13 +917,13 @@ pub const TPS_SETUP: &[Component] = &[
 
 pub const QUICK: &[crate::games::QuickSection] = &[
     crate::games::QuickSection {
-        title: "Look & Feel",
+        title: "Look & feel",
         blurb: "The classic comic-book ink, or a cleaner modern look.",
         tweaks: &["post_chain", "motion_blur", "dof"],
         quality_presets: &[],
     },
     crate::games::QuickSection {
-        title: "Graphics Quality",
+        title: "Graphics quality",
         blurb: "Pick a starting point, then fine-tune the essentials.",
         tweaks: &["view_distance", "ao", "dynamic_shadows", "physx"],
         quality_presets: &["potato", "balanced", "ultra"],
@@ -927,7 +935,7 @@ pub const QUICK: &[crate::games::QuickSection] = &[
         quality_presets: &[],
     },
     crate::games::QuickSection {
-        title: "Field of View",
+        title: "Field of view",
         blurb: "Past the 110 limit: pick a key, then press it after loading in.",
         tweaks: &["fov1_value", "fov2_key"],
         quality_presets: &[],

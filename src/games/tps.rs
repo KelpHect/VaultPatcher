@@ -42,6 +42,7 @@ pub static GAME: GameDef = GameDef {
     tweaks: willow::TWEAKS,
     // bForceNoMovies soft-locks TPS at startup (OpenBLCMM disables it too).
     hidden_tweaks: &["no_movies", "unbind_remaster"],
+    ranges: willow::RANGES,
     presets: willow::PRESETS,
     patches: PATCHES,
     mods: Some(&bl2::WILLOW2_SDK),
