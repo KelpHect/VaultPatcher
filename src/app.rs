@@ -12,7 +12,7 @@ use gpui::{
     WindowControlArea, div, img, prelude::*, px,
 };
 use gpui_component::Disableable as _;
-use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 
@@ -49,6 +49,8 @@ pub struct Shell {
     /// One focus handle per nav item, so arrow keys can move focus along
     /// the pane (it's a single Tab stop).
     nav_focus: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PageKind, gpui::FocusHandle>>>,
+    /// The pointer is over the Play button (its stripes march).
+    play_hovered: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -96,7 +98,7 @@ impl Shell {
             ws.search_input = Some(search);
             ws.profile_input = Some(profile);
         });
-        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, narrow: false, nav_focus: Default::default(), page_host, spinner: None, _subs: subs }
+        Self { ws, focus: cx.focus_handle(), history: Vec::new(), shown: None, going_back: false, pane_open: None, narrow: false, nav_focus: Default::default(), play_hovered: false, page_host, spinner: None, _subs: subs }
     }
 
     /// Tracks page changes for the back button. Switching game or mode starts
@@ -465,13 +467,28 @@ impl Shell {
         };
         let playable = can_play && !running;
         if compact {
-            let play = ui::button_if(playable, "rail-play", "", Some(Icon::Play), Variant::Primary)
-                .w(px(40.))
-                .h(px(36.))
-                .px(px(0.))
-                .gap(px(0.))
+            let ink = move |a: f32| theme::with_alpha(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }, a);
+            let play = ui::focusable(div().id("rail-play"))
+                .size(px(40.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(theme::RADIUS_LG))
+                .when(playable, |d| {
+                    d.bg(gpui::linear_gradient(
+                        135.,
+                        gpui::linear_color_stop(theme::accent(), 0.),
+                        gpui::linear_color_stop(theme::accent_hi(), 1.),
+                    ))
+                    .border_1()
+                    .border_color(theme::with_alpha(theme::accent_pressed(), 0.6))
+                    .shadow(theme::shadow_card())
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx)))
+                })
+                .when(!playable, |d| d.bg(theme::accent_disabled()))
                 .tooltip(ui::tip(if running { "Running" } else { tip }))
-                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx)));
+                .child(ui::icon(if running { Icon::Check } else { Icon::PlaySolid }).size(px(16.)).text_color(ink(1.)));
             return div()
                 .w(px(48.))
                 .flex_none()
@@ -497,45 +514,106 @@ impl Shell {
                 )
                 .into_any_element();
         }
-        // SplitButton: the halves meet with square inner corners.
-        let play = div()
+        // The launch button: bigger than any other control and the one place
+        // with a gradient and texture, since it's what the app builds up to.
+        // A SplitButton underneath: Play on the left, ways to start on the right.
+        let ink = move |a: f32| theme::with_alpha(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }, a);
+        let subtitle: SharedString = if !game.loaded {
+            "Looking for the game\u{2026}".into()
+        } else if running {
+            "Game is running".into()
+        } else if !can_play {
+            "Install not found".into()
+        } else {
+            match current_mode {
+                LaunchMode::Normal => "With your launch options".into(),
+                LaunchMode::Direct => "Skipping the launcher".into(),
+                LaunchMode::Launcher => "Through the game launcher".into(),
+            }
+        };
+        let hovered = self.play_hovered && playable;
+        // The stripes march while the pointer is on the button.
+        let stripes_at = move |shift: f32| div().absolute().top_0().bottom_0().right_0().w(px(120.)).child(ui::stripes(ink(0.1), shift));
+        let stripes = if hovered && theme::motion() {
+            div()
+                .absolute()
+                .inset_0()
+                .with_animation("play-stripes", Animation::new(Duration::from_millis(900)).repeat(), move |d, t| d.child(stripes_at(t)))
+                .into_any_element()
+        } else {
+            stripes_at(0.).into_any_element()
+        };
+        let main = ui::focusable(div().id("rail-play"))
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .flex()
-            .w_full()
+            .items_center()
+            .gap(px(12.))
+            .pl(px(12.))
+            .pr(px(8.))
+            .overflow_hidden()
+            .rounded_l(px(theme::RADIUS_LG))
+            .when(playable, |d| d.cursor_pointer().hover(|s| s.bg(ink(0.08))).active(|s| s.bg(ink(0.16))))
+            .tooltip(ui::tip(if running { "Running" } else { tip }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.play_hovered = *hovered;
+                cx.notify();
+            }))
+            .when(playable, |d| d.on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx))))
+            .child(stripes)
             .child(
-                ui::button_if(
-                    playable,
-                    "rail-play",
-                    if running { "Running".to_string() } else { format!("Play {short}") },
-                    Some(Icon::Play),
-                    Variant::Primary,
-                )
-                .flex_1()
-                .min_w_0()
-                .h(px(36.))
-                .rounded_tr(px(0.))
-                .rounded_br(px(0.))
-                .tooltip(ui::tip(if running { "Running" } else { tip }))
-                .on_click(move |_, _, cx| play_ws.update(cx, |ws, cx| ws.launch_default(cx))),
-            )
-            .child(div().w(px(1.)).h(px(36.)).bg(theme::with_alpha(theme::accent_ink(), 0.2)))
-            .child(
-                Button::new("rail-play-menu")
-                    .primary()
-                    .disabled(!playable)
-                    .h(px(36.))
-                    .w(px(36.))
+                div()
+                    .size(px(32.))
                     .flex_none()
-                    .rounded_tl(px(0.))
-                    .rounded_bl(px(0.))
-                    .tooltip("More ways to start the game")
-                    .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(if playable { theme::accent_ink() } else { theme::accent_ink_disabled() }))
+                    .rounded_full()
+                    .bg(ink(0.16))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(ui::icon(if running { Icon::Check } else { Icon::PlaySolid }).size(px(14.)).text_color(ink(1.))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(16.))
+                            .line_height(px(20.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(ink(1.))
+                            .child(if running { "Running".to_string() } else { format!("Play {short}") }),
+                    )
+                    .child(div().text_size(px(12.)).line_height(px(16.)).text_color(ink(0.8)).truncate().child(subtitle)),
+            );
+        let chevron = Button::new("rail-play-menu")
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(gpui::transparent_black())
+                    .foreground(ink(1.))
+                    .border(gpui::transparent_black())
+                    .hover(ink(0.08))
+                    .active(ink(0.16)),
+            )
+            .disabled(!playable)
+            .h_full()
+            .w(px(40.))
+            .flex_none()
+            .rounded_l(px(0.))
+            .rounded_r(px(theme::RADIUS_LG))
+            .tooltip("More ways to start the game")
+            .child(ui::icon(Icon::ChevronDown).size(px(12.)).text_color(ink(1.)))
                     .dropdown_menu_with_anchor(Corner::BottomLeft, move |mut menu, _, _| {
                         menu = menu.item(launch_item(format!("Play {short}"), "With your launch options", Icon::Play, LaunchMode::Normal));
                         if launcher_known {
                             menu = menu.item(launch_item(
                                 "Skip the launcher".into(),
                                 "The game exe directly — nothing rewrites your settings",
-                                Icon::Rocket,
+                                Icon::Bolt,
                                 LaunchMode::Direct,
                             ));
                         }
@@ -556,8 +634,28 @@ impl Shell {
                                 .on_click(move |_, _, cx| reapply_ws.update(cx, |ws, cx| ws.reapply_all(cx))),
                             )
                             .min_w(px(320.))
-                    }),
-            );
+                    });
+        let play = div()
+            .id("play-launch")
+            .flex()
+            .items_center()
+            .w_full()
+            .h(px(56.))
+            .rounded(px(theme::RADIUS_LG))
+            .when(playable, |d| {
+                d.bg(gpui::linear_gradient(
+                    100.,
+                    gpui::linear_color_stop(theme::accent(), 0.),
+                    gpui::linear_color_stop(theme::accent_hi(), 1.),
+                ))
+                .border_1()
+                .border_color(theme::with_alpha(theme::accent_pressed(), 0.6))
+                .shadow(theme::shadow_card())
+            })
+            .when(!playable, |d| d.bg(theme::accent_disabled()))
+            .child(main)
+            .child(div().w(px(1.)).h(px(28.)).bg(ink(0.2)))
+            .child(chevron);
 
         div()
             .w(px(PANE))
@@ -1052,7 +1150,7 @@ impl Render for Shell {
         let running = self.ws.read(cx).show_running_screen();
         // The spinner exists only while something runs in the background.
         match (self.ws.read(cx).busy.is_some(), self.spinner.is_some()) {
-            (true, false) => self.spinner = Some(cx.new(BusySpinner::new)),
+            (true, false) => self.spinner = Some(cx.new(|cx| BusySpinner::new(14., cx))),
             (false, true) => self.spinner = None,
             _ => {}
         }
@@ -1178,13 +1276,15 @@ impl Render for Shell {
 /// re-renders when the workspace changes or its own animations run.
 pub struct PageHost {
     ws: Entity<Workspace>,
+    /// The ProgressRing shown while startup reads the games.
+    spinner: Option<Entity<BusySpinner>>,
     _sub: Subscription,
 }
 
 impl PageHost {
     fn new(ws: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
         let sub = cx.observe(&ws, |_, _, cx| cx.notify());
-        Self { ws, _sub: sub }
+        Self { ws, spinner: None, _sub: sub }
     }
 }
 
@@ -1212,7 +1312,21 @@ impl Render for PageHost {
         };
         // The game is running: its own screen replaces the page.
         let running = self.ws.read(cx).show_running_screen();
+        let loaded = self.ws.read(cx).game().loaded;
+        if loaded {
+            self.spinner = None;
+        } else if self.spinner.is_none() {
+            self.spinner = Some(cx.new(|cx| BusySpinner::new(32., cx)));
+        }
         let page = match nav {
+            // Startup reads the games in the background; a ring until then.
+            _ if !loaded => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(self.spinner.clone())
+                .into_any_element(),
             _ if running => pages::running::render(&self.ws, window, cx),
             Some(nav) => pages::render(&nav, &self.ws, window, cx),
             None => div().into_any_element(),
@@ -1241,12 +1355,13 @@ impl Render for PageHost {
 /// 30 fps: the rest of the window isn't re-rendered for it, and it doesn't
 /// run at the monitor's refresh rate.
 pub struct BusySpinner {
+    size: f32,
     started: std::time::Instant,
     _tick: gpui::Task<()>,
 }
 
 impl BusySpinner {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(size: f32, cx: &mut Context<Self>) -> Self {
         let tick = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(33)).await;
@@ -1255,7 +1370,7 @@ impl BusySpinner {
                 }
             }
         });
-        Self { started: std::time::Instant::now(), _tick: tick }
+        Self { size, started: std::time::Instant::now(), _tick: tick }
     }
 }
 
@@ -1263,7 +1378,7 @@ impl Render for BusySpinner {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         // One 2 s cycle, like WinUI's ring; a still arc without motion.
         let t = if theme::motion() { (self.started.elapsed().as_secs_f32() / 2.).fract() } else { 0.2 };
-        ui::progress_ring_frame(14., t)
+        ui::progress_ring_frame(self.size, t)
     }
 }
 
@@ -1378,6 +1493,9 @@ fn status_color(g: &crate::workspace::GameState) -> gpui::Rgba {
 }
 
 fn status_text(g: &crate::workspace::GameState) -> &'static str {
+    if !g.loaded {
+        return "Looking for the game\u{2026}";
+    }
     match (&g.install, g.config_found()) {
         (Some(i), _) => match i.store {
             crate::core::detect::Store::Steam => "Installed · Steam",

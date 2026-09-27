@@ -915,6 +915,28 @@ pub fn progress_bar(id: impl Into<SharedString>, fraction: Option<f32>, color: R
     }
 }
 
+/// Diagonal stripes, like the hazard markings on a Borderlands vending
+/// machine, drawn in `color`. `shift` (0..1) slides them one period along,
+/// so a repeating animation makes them march.
+pub fn stripes(color: gpui::Hsla, shift: f32) -> impl IntoElement {
+    canvas(|_, _, _| {}, move |bounds, _, window, _| {
+        const PERIOD: f32 = 14.;
+        let h = f32::from(bounds.size.height);
+        let w = f32::from(bounds.size.width);
+        let mut x = -h - PERIOD + PERIOD * shift;
+        while x < w + PERIOD {
+            let mut path = PathBuilder::stroke(px(5.));
+            path.move_to(point(bounds.origin.x + px(x), bounds.origin.y + px(h)));
+            path.line_to(point(bounds.origin.x + px(x + h), bounds.origin.y));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+            x += PERIOD;
+        }
+    })
+    .size_full()
+}
+
 /// One frame of the indeterminate ProgressRing at cycle position `t`
 /// (0..1), for views that drive it on their own timer.
 pub fn progress_ring_frame(size: f32, t: f32) -> gpui::Div {

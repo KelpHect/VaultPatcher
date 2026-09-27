@@ -610,7 +610,7 @@ const NAV: &[NavGroup] = &[
             NavItem { kind: PageKind::Tweaks("textures"), title: "Textures & shadows", icon: Icon::Texture, categories: &["textures", "shadows"] },
             NavItem { kind: PageKind::Tweaks("effects"), title: "Outlines & effects", icon: Icon::Sparkle, categories: &["outlines", "postfx"] },
             NavItem { kind: PageKind::Tweaks("controls"), title: "Controls & interface", icon: Icon::Mouse, categories: &["input", "interface"] },
-            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & network", icon: Icon::Rocket, categories: &["startup", "network"] },
+            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & network", icon: Icon::Power, categories: &["startup", "network"] },
         ],
     },
     NavGroup {

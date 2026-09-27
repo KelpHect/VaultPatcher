@@ -197,8 +197,63 @@ pub struct ExeInfo {
     pub patch_states: HashMap<&'static str, PatchState>,
 }
 
+/// Everything a refresh reads from disk for one game. Built without the UI
+/// (so startup can read it on a background thread) and then handed to
+/// [`GameState::take_load`].
+struct GameLoad {
+    install: Option<Install>,
+    art: crate::core::art::Art,
+    launcher_file: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
+    config: ConfigSet,
+    exe: Option<ExeInfo>,
+    sdk: SdkStatus,
+    mods: Vec<ModEntry>,
+    backups: Vec<Backup>,
+    applied: crate::applied::Applied,
+}
+
+impl GameLoad {
+    fn read(def: &'static GameDef, settings: &AppSettings) -> Self {
+        let install = settings
+            .manual_installs
+            .get(def.id)
+            .filter(|p| p.join(def.exe).is_file())
+            .map(|p| Install {
+                root: p.clone(),
+                store: Store::Manual,
+            })
+            .or_else(|| detect::detect(&def.detect_spec()));
+        let exe_path = install.as_ref().map(|i| i.root.join(def.exe));
+        let art = crate::core::art::find(def.id, def.steam_app_ids, exe_path.as_deref());
+        let launcher_file = def
+            .launcher
+            .and_then(|l| install.as_ref().map(|i| i.root.join(l.exe)))
+            .filter(|p| p.is_file());
+        let config_dir = settings
+            .manual_config_dirs
+            .get(def.id)
+            .cloned()
+            .or_else(|| def.default_config_dir());
+        let config = match &config_dir {
+            Some(dir) => ConfigSet::load(dir, def.ini_files),
+            None => ConfigSet::default(),
+        };
+        let exe = exe_path.filter(|p| p.is_file()).and_then(|path| scan_exe(def, &path));
+        let (sdk, mods) = match (def.mods, &install) {
+            (Some(support), Some(install)) => (mods::sdk_status(def.id, support, &install.root), mods::scan(support, &install.root)),
+            _ => (SdkStatus::NotInstalled, Vec::new()),
+        };
+        // A record made for another settings folder or install doesn't apply here.
+        let applied = crate::applied::load(def.id).fit(config_dir.as_deref(), install.as_ref().map(|i| i.root.as_path()));
+        Self { install, art, launcher_file, config_dir, config, exe, sdk, mods, backups: backup::list(def.id), applied }
+    }
+}
+
 pub struct GameState {
     pub def: &'static GameDef,
+    /// Read from disk at least once (startup reads in the background).
+    pub loaded: bool,
     pub install: Option<Install>,
     /// Logo, banner and icon found on this PC (Steam cache / exe).
     pub art: crate::core::art::Art,
@@ -227,9 +282,29 @@ pub struct GameState {
 }
 
 impl GameState {
+    fn take_load(&mut self, load: GameLoad) {
+        let def = self.def;
+        self.loaded = true;
+        self.install = load.install;
+        self.art = load.art;
+        self.launcher_file = load.launcher_file;
+        self.config_dir = load.config_dir;
+        self.config = load.config;
+        self.exe = load.exe;
+        self.sdk = load.sdk;
+        self.mods = load.mods;
+        self.backups = load.backups;
+        self.applied = load.applied;
+        // Drop pending edits that now match the file.
+        let config = &self.config;
+        self.pending.retain(|id, v| def.tweak(id).is_some_and(|t| t.read(config).as_ref() != Some(v)));
+        self.invalidate_statuses();
+    }
+
     fn new(def: &'static GameDef) -> Self {
         Self {
             def,
+            loaded: false,
             install: None,
             art: Default::default(),
             config_dir: None,
@@ -433,10 +508,7 @@ impl Workspace {
         };
         // Before reading anything: a capture cut short last time left its shot settings behind.
         ws.recover_captures(cx);
-        for i in 0..ws.games.len() {
-            ws.refresh_game(i);
-        }
-        ws.run_watch.reset(ws.game().is_running_now());
+        ws.load_games(cx);
         ws.fetch_comparison_packs(cx);
         ws.check_updates(cx);
         let probe = cx.background_executor().spawn(async { crate::core::gpu::dxvk_ready().is_ok() });
@@ -454,14 +526,6 @@ impl Workspace {
             .ok();
         })
         .detach();
-        // UI sounds come from the first installed Willow game's launcher.
-        let audio_dir = ws
-            .games
-            .iter()
-            .filter_map(|g| g.install.as_ref())
-            .map(|i| i.root.join(crate::sound::AUDIO_DIR))
-            .find(|d| d.join("ButtonClick.mp3").is_file());
-        crate::sound::init(audio_dir.as_deref(), ws.settings.sound_muted, ws.settings.music);
         cx.notify();
         ws
     }
@@ -584,58 +648,42 @@ impl Workspace {
 
     // ---- detection & loading -------------------------------------------------
 
-    pub fn refresh_game(&mut self, index: usize) {
+    /// Reads every game from disk on a background thread, so the window
+    /// shows up before detection, configs, mods and backups are read (about
+    /// 130 ms warm, far more on a cold disk). Pages show a ProgressRing
+    /// until [`GameState::loaded`].
+    fn load_games(&mut self, cx: &mut Context<Self>) {
+        let defs: Vec<&'static GameDef> = self.games.iter().map(|g| g.def).collect();
         let settings = self.settings.clone();
-        let game = &mut self.games[index];
-        let def = game.def;
-
-        game.install = settings
-            .manual_installs
-            .get(def.id)
-            .filter(|p| p.join(def.exe).is_file())
-            .map(|p| Install {
-                root: p.clone(),
-                store: Store::Manual,
-            })
-            .or_else(|| detect::detect(&def.detect_spec()));
-        game.art = crate::core::art::find(def.id, def.steam_app_ids, game.exe_path().as_deref());
-        game.launcher_file = def
-            .launcher
-            .and_then(|l| game.install.as_ref().map(|i| i.root.join(l.exe)))
-            .filter(|p| p.is_file());
-
-        game.config_dir = settings
-            .manual_config_dirs
-            .get(def.id)
-            .cloned()
-            .or_else(|| def.default_config_dir());
-        game.config = match &game.config_dir {
-            Some(dir) => ConfigSet::load(dir, def.ini_files),
-            None => ConfigSet::default(),
-        };
-        // Drop pending edits that now match the file.
-        let config = &game.config;
-        game.pending.retain(|id, v| {
-            def.tweak(id)
-                .is_some_and(|t| t.read(config).as_ref() != Some(v))
+        let task = cx.background_executor().spawn(async move {
+            defs.into_iter().map(|def| GameLoad::read(def, &settings)).collect::<Vec<_>>()
         });
+        cx.spawn(async move |this, cx| {
+            let loads = task.await;
+            this.update(cx, |ws, cx| {
+                // A game refreshed meanwhile (a folder picked) is newer.
+                for (game, load) in ws.games.iter_mut().zip(loads).filter(|(g, _)| !g.loaded) {
+                    game.take_load(load);
+                }
+                ws.run_watch.reset(ws.game().is_running_now());
+                // UI sounds come from the first installed Willow game's launcher.
+                let audio_dir = ws
+                    .games
+                    .iter()
+                    .filter_map(|g| g.install.as_ref())
+                    .map(|i| i.root.join(crate::sound::AUDIO_DIR))
+                    .find(|d| d.join("ButtonClick.mp3").is_file());
+                crate::sound::init(audio_dir.as_deref(), ws.settings.sound_muted, ws.settings.music);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
 
-        game.exe = game.exe_path().filter(|p| p.is_file()).and_then(|path| scan_exe(def, &path));
-        game.invalidate_statuses();
-
-        match (def.mods, &game.install) {
-            (Some(support), Some(install)) => {
-                game.sdk = mods::sdk_status(def.id, support, &install.root);
-                game.mods = mods::scan(support, &install.root);
-            }
-            _ => {
-                game.sdk = SdkStatus::NotInstalled;
-                game.mods.clear();
-            }
-        }
-        game.backups = backup::list(def.id);
-        // A record made for another settings folder or install doesn't apply here.
-        game.applied = crate::applied::load(def.id).fit(game.config_dir.as_deref(), game.install.as_ref().map(|i| i.root.as_path()));
+    pub fn refresh_game(&mut self, index: usize) {
+        let load = GameLoad::read(self.games[index].def, &self.settings);
+        self.games[index].take_load(load);
     }
 
     pub fn refresh_active(&mut self, cx: &mut Context<Self>) {

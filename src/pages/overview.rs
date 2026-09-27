@@ -152,7 +152,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
     }
     glance = glance
         .child(ui::divider())
-        .child(stat("g-upgrades", Icon::Rocket, format!("{upgrades} / {}", def.setup.len()), "One-click upgrades installed", PageKind::Setup))
+        .child(stat("g-upgrades", Icon::Bolt, format!("{upgrades} / {}", def.setup.len()), "One-click upgrades installed", PageKind::Setup))
         .child(ui::divider())
         .child(stat("g-backups", Icon::History, game.backups.len().to_string(), "Backups", PageKind::Backups));
     let folders = div()

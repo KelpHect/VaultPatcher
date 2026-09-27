@@ -90,7 +90,7 @@ pub fn apply_mica(window: &gpui::Window) -> bool {
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows_sys::Win32::Graphics::Dwm::{
-            DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+            DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
             DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
         };
         use windows_sys::Win32::UI::Controls::MARGINS;
@@ -100,6 +100,9 @@ pub fn apply_mica(window: &gpui::Window) -> bool {
         let hwnd = h.hwnd.get() as windows_sys::Win32::Foundation::HWND;
         let backdrop = DWMSBT_MAINWINDOW;
         let corners = DWMWCP_ROUND;
+        // Mica's tint follows the frame's dark mode; match our theme (which
+        // VAULT_PATCHER_THEME can override) rather than the system's.
+        let dark = i32::from(system_theme().dark);
         // The backdrop shows through wherever the client area is transparent;
         // gpui renders through DirectComposition with premultiplied alpha.
         let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
@@ -107,6 +110,7 @@ pub fn apply_mica(window: &gpui::Window) -> bool {
         // sized attribute values.
         unsafe {
             DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as _, (&corners as *const i32).cast(), 4);
+            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as _, (&dark as *const i32).cast(), 4);
             if DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE as _, (&backdrop as *const i32).cast(), 4) < 0 {
                 return false;
             }

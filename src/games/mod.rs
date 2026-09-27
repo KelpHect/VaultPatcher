@@ -222,7 +222,7 @@ pub const SIMPLE_NAV: &[NavGroup] = &[
             NavItem {
                 kind: PageKind::Setup,
                 title: "One-click setup",
-                icon: Icon::Rocket,
+                icon: Icon::Bolt,
                 categories: &[],
             },
             NavItem {

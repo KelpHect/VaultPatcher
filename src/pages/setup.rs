@@ -53,7 +53,7 @@ pub fn render(ws: &Entity<Workspace>, _window: &mut Window, cx: &mut App) -> Any
             !running,
             "setup-patch",
             if running { "Working…".to_string() } else { format!("Upgrade game ({to_install})") },
-            Some(Icon::Rocket),
+            Some(Icon::Bolt),
             Variant::Primary,
         )
         .tooltip(ui::tip(if running { "Setup is running" } else { "Installs everything ticked below. Every change is backed up." }))

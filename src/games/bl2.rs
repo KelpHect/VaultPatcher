@@ -156,7 +156,7 @@ pub const NAV: &[NavGroup] = &[
             NavItem { kind: PageKind::Tweaks("physx"), title: "PhysX", icon: Icon::Atom, categories: &["physx"] },
             NavItem { kind: PageKind::Tweaks("controls"), title: "Camera & controls", icon: Icon::Mouse, categories: &["camera", "input"] },
             NavItem { kind: PageKind::Tweaks("gameplay"), title: "HUD & gameplay", icon: Icon::Hud, categories: &["hud", "gameplay", "audio"] },
-            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & network", icon: Icon::Rocket, categories: &["startup", "network"] },
+            NavItem { kind: PageKind::Tweaks("system"), title: "Startup & network", icon: Icon::Power, categories: &["startup", "network"] },
         ],
     },
     NavGroup {

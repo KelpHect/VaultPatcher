@@ -12,6 +12,11 @@ crate from `~/.cargo/registry/src/*/gpui-<version>`.
 
 ## gpui
 
+- **Alpha blending over Mica** (`directx_renderer.rs`): the main blend state
+  composites alpha "over" (`a + d(1 - a)`) instead of adding it. The
+  swapchain is premultiplied over the Mica backdrop, and additive alpha made
+  stacked translucent fills (a card on the content layer) turn opaque grey.
+
 - **Backdrop blur** (Fluent acrylic): `Styled::backdrop_blur(px)` /
   `Style::backdrop_blur`, painted before the element's shadow and background
   through `Window::paint_backdrop_blur`. It adds a `Backdrop` scene primitive
