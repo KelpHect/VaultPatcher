@@ -319,9 +319,6 @@ struct NumberBoxEntry {
     _sub: Subscription,
 }
 
-thread_local! {
-    static BOXES: RefCell<HashMap<SharedString, NumberBoxEntry>> = RefCell::new(HashMap::new());
-}
 
 /// One step up or down from what the box shows (Shift: ten steps).
 fn step_value(model: &BoxModel, text: &str, up: bool, big: bool) -> f64 {
@@ -375,43 +372,41 @@ fn step_and_commit(input: &Entity<InputState>, model: &Rc<RefCell<BoxModel>>, up
     }
 }
 
+/// The box's input and model, kept in the element's own state: GPUI drops it
+/// the first frame the box isn't drawn, so a page you leave takes its text
+/// inputs with it instead of keeping one per setting ever shown.
 fn entry(id: &SharedString, value: f64, control: Control, on_commit: OnValue, window: &mut Window, cx: &mut App) -> (Entity<InputState>, Rc<RefCell<BoxModel>>, Rc<Cell<bool>>) {
-    if let Some(found) = BOXES.with(|b| {
-        b.borrow().get(id).map(|e| {
-            *e.model.borrow_mut() = BoxModel { value, control, on_commit: on_commit.clone() };
-            (e.input.clone(), e.model.clone(), e.invalid.clone())
-        })
-    }) {
-        return found;
-    }
-    let text = control.number_text(value);
-    let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
-    let model = Rc::new(RefCell::new(BoxModel { value, control, on_commit }));
-    let invalid = Rc::new(Cell::new(false));
-    let (sub_model, sub_invalid) = (model.clone(), invalid.clone());
-    let sub = window.subscribe(&input, cx, move |input, ev: &InputEvent, window, cx| match ev {
-        InputEvent::PressEnter { .. } => {
-            let ok = commit_text(&input, &sub_model, window, cx);
-            sub_invalid.set(!ok);
-            window.refresh();
-        }
-        InputEvent::Blur => {
-            if !commit_text(&input, &sub_model, window, cx) {
-                revert(&input, &sub_model, window, cx);
+    let init_commit = on_commit.clone();
+    let state = window.use_keyed_state(ElementId::Name(format!("{id}-state").into()), cx, move |window, cx| {
+        let text = control.number_text(value);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
+        let model = Rc::new(RefCell::new(BoxModel { value, control, on_commit: init_commit }));
+        let invalid = Rc::new(Cell::new(false));
+        let (sub_model, sub_invalid) = (model.clone(), invalid.clone());
+        let sub = window.subscribe(&input, cx, move |input, ev: &InputEvent, window, cx| match ev {
+            InputEvent::PressEnter { .. } => {
+                let ok = commit_text(&input, &sub_model, window, cx);
+                sub_invalid.set(!ok);
+                window.refresh();
             }
-            sub_invalid.set(false);
-            window.refresh();
-        }
-        InputEvent::Change if sub_invalid.get() => {
-            sub_invalid.set(false);
-            window.refresh();
-        }
-        _ => {}
+            InputEvent::Blur => {
+                if !commit_text(&input, &sub_model, window, cx) {
+                    revert(&input, &sub_model, window, cx);
+                }
+                sub_invalid.set(false);
+                window.refresh();
+            }
+            InputEvent::Change if sub_invalid.get() => {
+                sub_invalid.set(false);
+                window.refresh();
+            }
+            _ => {}
+        });
+        NumberBoxEntry { input, model, invalid, _sub: sub }
     });
-    BOXES.with(|b| {
-        b.borrow_mut().insert(id.clone(), NumberBoxEntry { input: input.clone(), model: model.clone(), invalid: invalid.clone(), _sub: sub });
-    });
-    (input, model, invalid)
+    let e = state.read(cx);
+    *e.model.borrow_mut() = BoxModel { value, control, on_commit };
+    (e.input.clone(), e.model.clone(), e.invalid.clone())
 }
 
 /// WinUI NumberBox: type a value and press Enter (or leave the box); Up/Down

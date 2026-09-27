@@ -493,6 +493,10 @@ fn update_slider(id: &SharedString, f: impl FnOnce(&mut SliderState)) {
             }
         };
         f(&mut s[entry].1);
+        // Only sliders mid-drag (or showing their keyboard tooltip) need
+        // state; the rest go, so it never grows with the sliders visited.
+        let now = Instant::now();
+        s.retain(|(_, st)| st.preview.is_some() || st.cancelled || st.tip_until.is_some_and(|t| t > now));
     });
 }
 

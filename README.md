@@ -7,6 +7,10 @@ MarkerPatch (Dead Space 2) and Fallout 76 Quick Configuration. Built in Rust wit
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-component](https://github.com/longbridge/gpui-component).
 
+<p align="center">
+  <img src="assets/demo.gif" width="720" alt="Vault Patcher demo: the app window swings in, the Play button's light circles it, a quality select opens and picks a tier, a comparison split is dragged, and the theme wipes from dark to light">
+</p>
+
 **Borderlands 2** and **Borderlands GOTY Enhanced** are fully supported. **The Pre-Sequel** is
 in preview (detection, tweaks, presets, SDK install).
 

@@ -330,10 +330,9 @@ pub fn lightbox(ws: &Entity<Workspace>, window: &Window, cx: &App) -> Option<Any
     let close_btn_ws = ws.clone();
     Some(
         div()
-            // Full-size shots live in a cache owned by the viewer: only the
-            // last two pairs stay decoded (stepping back is still instant),
-            // and all of it is freed when the viewer closes.
-            .image_cache(gpui::retain_recent("lightbox-images", 4))
+            // Only the pair on screen stays decoded; stepping to another
+            // pair frees the last one, and closing frees everything.
+            .image_cache(gpui::retain_recent("lightbox-images", 2))
             .id("lightbox")
             .absolute()
             .inset_0()

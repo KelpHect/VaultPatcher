@@ -57,3 +57,10 @@ opt-level = 2
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Release-speed builds for testing (`cargo build --profile quick`): thin LTO
+# and parallel codegen use every core. Published builds use `release`.
+[profile.quick]
+inherits = "release"
+lto = "thin"
+codegen-units = 16

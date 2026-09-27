@@ -82,6 +82,17 @@ impl Shell {
                     this.page_host.update(cx, |_, cx| cx.notify());
                 }
                 this.ws.update(cx, |ws, cx| ws.window_activation_changed(active, cx));
+                // Out of focus for a couple of seconds: hand the physical
+                // memory we aren't using back to Windows for other apps.
+                if !active {
+                    cx.spawn_in(window, async move |_, cx| {
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
+                        if cx.update(|window, _| !window.is_window_active()).unwrap_or(false) {
+                            crate::win11::trim_memory();
+                        }
+                    })
+                    .detach();
+                }
                 cx.notify();
             }),
             // Windows switched between light and dark.
@@ -1368,6 +1379,7 @@ impl Render for PageHost {
             None => div().into_any_element(),
         };
         let page_key = SharedString::from(format!("page-{game_id}-{page_kind:?}-{running}"));
+        let images_key = ElementId::Name(format!("images-{page_key}").into());
         // Pages enter with Windows' page-refresh motion (rise and fade in).
         let content = if running || pages::fills_height(page_kind) {
             div().flex_1().min_h_0().flex().flex_col().child(ui::entrance_fill(page_key, 140., page))
@@ -1384,10 +1396,9 @@ impl Render for PageHost {
         };
         let pending_bar = Shell::pending_bar(&self.ws, cx).filter(|_| !running);
         div()
-            // Pages share a cache of their most recent images, so the ones a
-            // page you've left was showing are freed instead of kept for the
-            // whole run.
-            .image_cache(gpui::retain_recent("page-images", 24))
+            // Each page has its own image cache holding only what it just
+            // drew: leaving the page drops the cache and frees its images.
+            .image_cache(gpui::retain_recent(images_key, 6))
             .size_full()
             .flex()
             .flex_col()
